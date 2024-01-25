@@ -10,6 +10,7 @@ OBJECTS = $(patsubst $(SRCDIR)/*.cpp, $(BUILDDIR)/%.o, $(SOURCES))
 TARGET = $(BUILDDIR)/lb
 
 lb: $(TARGET)
+	$(info build complete)	
 
 $(TARGET): $(OBJECTS)
 	g++ $(CFLAGS) $^ -o $@

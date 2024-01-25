@@ -1,4 +1,5 @@
 #include <iostream>
+#include <map>
 #include <queue>
 #include <mutex>
 #include <condition_variable>
@@ -7,20 +8,14 @@
 #include <fcntl.h>
 
 #include "../lib/net.h"
+#include "../lib/handle.h"
 
 using namespace std;
 
 queue<task> taskQueue;
 mutex threadMutex;
 condition_variable threadCondition;
-
-void handle_client(task threadTask){
-    char buf[3];
-    cout << "received on " << threadTask.fd << "\n";
-    recv(threadTask.fd, buf, 2, 0);
-    buf[2] = '\0';
-    cout << buf << endl;
-}
+map<int,int> serverMap;
 
 void threadExec(){
     
@@ -32,51 +27,52 @@ void threadExec(){
             threadTask = taskQueue.front();
             taskQueue.pop();
         }
-        // fucntion for fd
-        handle_client(threadTask);
+        cout << "called fuck you \n";
+        handleClient(threadTask, &serverMap);
     }
 }
 
-int monitorFd(lbSocket Conn, int epollFd, epoll_event epollFdArray[]){
+int connectNewClient(lbSocket &conn, int epollFd){
+    lbSocket clientconn;
+    clientconn.fd = accept(conn.fd,
+                reinterpret_cast<sockaddr*>(&conn.addr),
+                &conn.addrlen);
+
+    if(clientconn.fd != -1){
+        int flags = fcntl(clientconn.fd, F_GETFL, 0);
+        epoll_event epollEvent;
+        flags |= O_NONBLOCK;
+        epollEvent.data.fd = clientconn.fd;
+        epollEvent.events = EPOLLIN | EPOLLRDHUP | EPOLLONESHOT;
+
+        if(fcntl(clientconn.fd, F_SETFL, flags) == -1){
+            cerr << "fnctl error";
+            return -1;
+        }
+
+        if(epoll_ctl(epollFd, EPOLL_CTL_ADD, 
+                    clientconn.fd, &epollEvent) == -1){
+            cout << "epoll_ctl client error\n";
+            close(clientconn.fd);
+        }else{
+            cout << "new connection\n";
+        }
+    }
+    return 0;
+}
+
+int monitorFd(lbSocket conn, int epollFd, epoll_event epollFdArray[]){
 
     while(true){
-
         int numEvents = epoll_wait(epollFd, epollFdArray, 1000, -1);
-
         if(numEvents == -1){
             cout << "epoll wait error\n";
             return -1;
         }
 
         for(int i=0; i<numEvents; i++){
-
-            if(epollFdArray[i].data.fd == Conn.fd){
-                lbSocket clientConn;
-                clientConn.fd = accept(Conn.fd,
-                            reinterpret_cast<sockaddr*>(&Conn.addr),
-                            &Conn.addrlen);
-
-                if(clientConn.fd != -1){
-
-                    int flags = fcntl(clientConn.fd, F_GETFL, 0);
-                    epoll_event epollEvent;
-                    flags |= O_NONBLOCK;
-                    epollEvent.data.fd = clientConn.fd;
-                    epollEvent.events = EPOLLIN | EPOLLRDHUP | EPOLLONESHOT;
-
-                    if(fcntl(clientConn.fd, F_SETFL, flags) == -1){
-                        cerr << "fnctl error";
-                        return -1;
-                    }
-
-                    if(epoll_ctl(epollFd, EPOLL_CTL_ADD, 
-                                clientConn.fd, &epollEvent) == -1){
-                        cout << "epoll_ctl client error\n";
-                        close(clientConn.fd);
-                    }else{
-                        cout << "new connection\n";
-                    }
-                } 
+            if(epollFdArray[i].data.fd == conn.fd){
+                connectNewClient(conn, epollFd);
             }
             else if(epollFdArray[i].events & EPOLLIN){
                 task threadTask;
@@ -100,6 +96,7 @@ int setupSocket(lbSocket &socketInfo, int port, int epollFd){
 
     epoll_event epollEvent;
     int flags;
+    int reuse = 1;
     socketInfo.addr.sin_family = AF_INET;
     socketInfo.addr.sin_port = htons(port);
     socketInfo.addr.sin_addr.s_addr = INADDR_ANY;
@@ -111,9 +108,15 @@ int setupSocket(lbSocket &socketInfo, int port, int epollFd){
         cerr << "error creating socket socketInfo";
         return -1;
     }
+    
+    if(setsockopt(socketInfo.fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse))<0){
+        printf("setting SO_REUSEPORT failed\n");
+        exit(-1);
+    }
 
     flags = fcntl(socketInfo.fd, F_GETFL, 0);
     flags |= O_NONBLOCK;
+    
 
     if(bind(socketInfo.fd,
             reinterpret_cast<struct sockaddr*>(&socketInfo.addr),
