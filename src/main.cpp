@@ -17,8 +17,7 @@ void parse(string rawInput, vector<string> &inputCommand){
         string temp;
 
         while(true){
-            if(rawInput[counter] == ' ' ||
-                    i == (int)rawInput.size()){
+            if(rawInput[counter] == ' ' || i == (int)rawInput.size()){
                 i++;
                 break;
             }
@@ -33,36 +32,50 @@ void parse(string rawInput, vector<string> &inputCommand){
 
 int main() {
 
-    int epollFd;
-    epoll_event *epollFdArray;
+    int epollClientFd;
+    int epollServerFd;
+    epoll_event *epollClientFdArray;
+    epoll_event *epollServerFdArray;
     lbSocket lbClientSocket;
 
-    epollFd = epoll_create1(0);
-    if(epollFd == -1){
+    epollClientFd = epoll_create1(0);
+    if(epollClientFd == -1){
+        cerr << "error creating epoll";
+        return -1;
+    }
+
+    epollServerFd = epoll_create1(0);
+    if(epollServerFd == -1){
         cerr << "error creating epoll";
         return -1;
     }
     
-    epollFdArray = new epoll_event[1000];
+    epollClientFdArray = new epoll_event[1000];
+    epollServerFdArray = new epoll_event[1000];
     
-    setupSocket(lbClientSocket, LB_CLIENT_PORT, epollFd);
+    setupClientListener(lbClientSocket, LB_CLIENT_PORT, epollClientFd);
 
-    thread clientThread(monitorFd,
+    thread clientThread(monitorClientFd,
             lbClientSocket,
-            epollFd,
-            epollFdArray);
+            epollClientFd,
+            epollClientFdArray);
+
+    thread serverThread(monitorServerFd,
+            epollServerFd,
+            epollServerFdArray);
     
     thread workerThreads[4] = {
-        thread(threadExec),
-        thread(threadExec),
-        thread(threadExec),
-        thread(threadExec)
+        thread(threadExec, epollServerFd),
+        thread(threadExec, epollServerFd),
+        thread(threadExec, epollServerFd),
+        thread(threadExec, epollServerFd)
     };
 
     while(true){
         
         string rawInput;
         vector<string> inputCommand;
+        cout << "\nlb::";
         getline(cin,rawInput);
         
         parse(rawInput, inputCommand);

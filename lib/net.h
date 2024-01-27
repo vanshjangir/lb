@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/epoll.h>
+#include <string>
 
 #define LB_CLIENT_PORT      8080
 #define MAX_RECV_SIZE       4096
@@ -11,13 +12,13 @@
 #define CUSTOM_HEADER_SIZE  14
 
 enum taskType{
-    SEND,
-    RECEIVE,
+    LB_REQUEST,
+    LB_RESPONSE,
 };
 
 enum serverStatus{
-    ALIVE,
-    DEAD,
+    LB_SERVER_ALIVE,
+    LB_SERVER_DEAD,
 };
 
 struct lbSocket{
@@ -28,12 +29,14 @@ struct lbSocket{
 
 struct task{
     int fd;
+    int epollFd;
     taskType type;
 };
 
-void threadExec();
-int monitorFd(lbSocket, int, epoll_event*);
-int setupSocket(lbSocket&, int, int);
-
+void threadExec(int);
+int monitorClientFd(lbSocket, int, epoll_event*);
+int monitorServerFd(int, epoll_event*);
+int setupClientListener(lbSocket&, int, int);
+int connectToServer(char*, int, int);
 
 #endif // !NET_H
