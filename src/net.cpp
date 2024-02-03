@@ -1,5 +1,4 @@
 #include <iostream>
-#include <map>
 #include <queue>
 #include <mutex>
 #include <condition_variable>
@@ -7,33 +6,12 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include "../lib/lb.h"
 #include "../lib/net.h"
-#include "../lib/handle.h"
 
 using namespace std;
 
-queue<task> taskQueue;
-mutex threadMutex;
-condition_variable threadCondition;
-map<int,int> serverMap;
-
-void threadExec(int epollFd){
-    
-    while(true){
-        task threadTask;
-        {
-            unique_lock<mutex> lock(threadMutex);
-            threadCondition.wait(lock, [&]{ return !taskQueue.empty(); });
-            threadTask = taskQueue.front();
-            threadTask.epollFd = epollFd;
-            taskQueue.pop();
-        }
-        cout << "called\n";
-        handleClient(threadTask, &serverMap);
-    }
-}
-
-int connectNewClient(lbSocket &conn, int epollFd){
+int connectNewClient(lbSocket &conn, int epollClientFd){
     lbSocket client;
     client.fd = accept(conn.fd,
                 reinterpret_cast<sockaddr*>(&conn.addr),
@@ -51,7 +29,7 @@ int connectNewClient(lbSocket &conn, int epollFd){
             return -1;
         }
 
-        if(epoll_ctl(epollFd, EPOLL_CTL_ADD, 
+        if(epoll_ctl(epollClientFd, EPOLL_CTL_ADD, 
                     client.fd, &epollEvent) == -1){
             cout << "epoll_ctl client error\n";
             close(client.fd);
@@ -61,7 +39,13 @@ int connectNewClient(lbSocket &conn, int epollFd){
     }
     return 0;
 }
-int connectToServer(char serverIP[], int port, int epollFd){
+
+int connectToServer(
+        char serverIP[],
+        int port,
+        int epollServerFd,
+        map<int,int> *serverMap)
+{
     int rc;
     int flags;
     lbSocket server;
@@ -84,7 +68,7 @@ int connectToServer(char serverIP[], int port, int epollFd){
             server.addrlen
             );
     if(rc == 0){
-        serverMap[server.fd] = LB_SERVER_ALIVE;
+        (*serverMap)[server.fd] = LB_SERVER_ALIVE;
         cout << "connected properly with " << server.fd << endl;
     }else{
         cout << "unsuccessful\n";
@@ -103,7 +87,7 @@ int connectToServer(char serverIP[], int port, int epollFd){
     epollEvent.data.fd = server.fd;
     epollEvent.events = EPOLLIN | EPOLLONESHOT | EPOLLRDHUP;
 
-    rc = epoll_ctl(epollFd, EPOLL_CTL_ADD, server.fd, &epollEvent);
+    rc = epoll_ctl(epollServerFd, EPOLL_CTL_ADD, server.fd, &epollEvent);
     if(rc == -1){
         close(server.fd);
         return -1;
@@ -111,10 +95,14 @@ int connectToServer(char serverIP[], int port, int epollFd){
     return server.fd;
 }
 
-int monitorClientFd(lbSocket conn, int epollFd, epoll_event epollFdArray[]){
+int monitorClientFd(lbSocket conn, int epollClientFd, epoll_event epollFdArray[]){
 
     while(true){
-        int numEvents = epoll_wait(epollFd, epollFdArray, 1000, -1);
+        
+        if(exitThread)
+            break;
+        
+        int numEvents = epoll_wait(epollClientFd, epollFdArray, 1000, -1);
         if(numEvents == -1){
             cout << "epoll wait error\n";
             return -1;
@@ -122,7 +110,7 @@ int monitorClientFd(lbSocket conn, int epollFd, epoll_event epollFdArray[]){
 
         for(int i=0; i<numEvents; i++){
             if(epollFdArray[i].data.fd == conn.fd){
-                connectNewClient(conn, epollFd);
+                connectNewClient(conn, epollClientFd);
             }
             else if(epollFdArray[i].events & EPOLLIN){
                 task threadTask;
@@ -142,10 +130,14 @@ int monitorClientFd(lbSocket conn, int epollFd, epoll_event epollFdArray[]){
     return 0;
 }
 
-int monitorServerFd(int epollFd, epoll_event epollFdArray[]){
+int monitorServerFd(map<int,int> *serverMap, int epollServerFd, epoll_event epollFdArray[]){
 
     while(true){
-        int numEvents = epoll_wait(epollFd, epollFdArray, 1000, -1);
+
+        if(exitThread)
+            break;
+
+        int numEvents = epoll_wait(epollServerFd, epollFdArray, 1000, -1);
         if(numEvents == -1){
             cout << "epoll wait error\n";
             return -1;
@@ -156,6 +148,8 @@ int monitorServerFd(int epollFd, epoll_event epollFdArray[]){
                 task threadTask;
                 threadTask.fd = epollFdArray[i].data.fd;
                 threadTask.type = LB_RESPONSE;
+                threadTask.serverInfo.first = epollServerFd;
+                threadTask.serverInfo.second = serverMap;
                 {
                     unique_lock<mutex> lock(threadMutex);
                     taskQueue.push(threadTask);
@@ -171,7 +165,7 @@ int monitorServerFd(int epollFd, epoll_event epollFdArray[]){
 }
 
 
-int setupClientListener(lbSocket &socketInfo, int port, int epollFd){
+int setupClientListener(lbSocket &socketInfo, int port, int epollClientFd){
 
     epoll_event epollEvent;
     int flags;
@@ -219,7 +213,7 @@ int setupClientListener(lbSocket &socketInfo, int port, int epollFd){
     epollEvent.events = EPOLLIN;
     epollEvent.data.fd = socketInfo.fd;
 
-    if(epoll_ctl(epollFd, EPOLL_CTL_ADD, socketInfo.fd, &epollEvent) == -1){
+    if(epoll_ctl(epollClientFd, EPOLL_CTL_ADD, socketInfo.fd, &epollEvent) == -1){
         cerr << "error_ctl error socketInfo";
         return -1;
     }

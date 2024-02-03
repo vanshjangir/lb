@@ -5,16 +5,18 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <string>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <map>
+
+#include "lb.h"
 
 #define LB_CLIENT_PORT      8080
 #define MAX_RECV_SIZE       4096
 #define SERVER_PORT         3000
 #define CUSTOM_HEADER_SIZE  14
-
-enum taskType{
-    LB_REQUEST,
-    LB_RESPONSE,
-};
 
 enum serverStatus{
     LB_SERVER_ALIVE,
@@ -27,16 +29,10 @@ struct lbSocket{
     socklen_t addrlen;
 };
 
-struct task{
-    int fd;
-    int epollFd;
-    taskType type;
-};
-
-void threadExec(int);
 int monitorClientFd(lbSocket, int, epoll_event*);
-int monitorServerFd(int, epoll_event*);
+int monitorServerFd(std::map<int,int>*, int, epoll_event*);
 int setupClientListener(lbSocket&, int, int);
-int connectToServer(char*, int, int);
+int connectToServer(char*, int, int, std::map<int,int>*);
+int connectNewClient(lbSocket&, int);
 
 #endif // !NET_H

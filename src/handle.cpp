@@ -8,7 +8,7 @@
 
 using namespace std;
 
-void handleClient(task threadTask, map<int,int>* serverMap){
+void handleClient(task threadTask){
     
     char buffer[MAX_RECV_SIZE +1];
     ssize_t bytes_received = 0;
@@ -20,7 +20,7 @@ void handleClient(task threadTask, map<int,int>* serverMap){
             0);
 
     if(threadTask.type == LB_REQUEST){
-        sendToServer(buffer, bytes_received, threadTask.epollFd, serverMap);
+        sendToServer(buffer, bytes_received, threadTask);
     }else{
         sendToClient(buffer, bytes_received);
         close(threadTask.fd);
@@ -29,22 +29,47 @@ void handleClient(task threadTask, map<int,int>* serverMap){
 
 int sendToClient(char buffer[], int length){
     ssize_t bytes_sent;
-    int fd = 6;
-    printf("%s\n%d\n", buffer, length);
+    int fd = getClientResponseFd(buffer, length);
     bytes_sent = send(fd,buffer,length,0);
+    close(fd);
     return bytes_sent;
 }
 
-int sendToServer(char *buffer, int length, int epollFd, map<int,int>* serverMap){
+int getClientResponseFd(char buffer[], int length){
+    
+    int fd = 0;
+    char *loc = NULL;
+    for(int i=0; i<length-2; i++){
+        if(buffer[i] == 'f' && buffer[i+1] == 'd' && buffer[i+2] == ':'){
+            loc = buffer+(i+4);
+            break;
+        }
+    }
+
+    if(loc == NULL){
+        return -1;
+    }
+
+    for(int i=0; i<8; i++){
+        fd += fd*10 +(loc[i] - '0');
+    }
+
+    return fd;
+}
+
+int sendToServer(char *buffer, int length, task& threadTask){
 
     int fd;
-    int rc = 0;
     int firstChunkLength;
     char serverIP[16] = "127.0.0.1";
     char clientFdHeader[15];
     ssize_t bytes_sent;
 
-    fd = connectToServer(serverIP, 3000, epollFd);
+    fd = connectToServer(
+            serverIP,
+            3000,
+            threadTask.serverInfo.first,
+            threadTask.serverInfo.second);
 
     firstChunkLength = 0;
     while(true){
@@ -60,7 +85,7 @@ int sendToServer(char *buffer, int length, int epollFd, map<int,int>* serverMap)
         return -1;
     }
 
-    addClientFdHeader(clientFdHeader, fd);
+    addClientFdHeader(clientFdHeader, threadTask.fd);
     bytes_sent = send(fd, clientFdHeader, CUSTOM_HEADER_SIZE, 0);
     if(bytes_sent <= 0){
         return -1;

@@ -5,9 +5,10 @@
 #include <map>
 #include "net.h"
 
-void handleClient(task, std::map<int,int>*);
-int sendToServer(char*, int, int, std::map<int,int>*);
+void handleClient(task);
+int sendToServer(char*, int, task&); 
 int sendToClient(char*, int);
 int addClientFdHeader(char*, int);
+int getClientResponseFd(char*, int);
 
 #endif // !HANDLE_H

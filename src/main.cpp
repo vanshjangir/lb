@@ -5,8 +5,16 @@
 #include <thread>
 #include <unistd.h>
 #include <fcntl.h>
+#include <atomic>
 
 #include "../lib/net.h"
+#include "../lib/lb.h"
+#include "../lib/handle.h"
+
+std::atomic<bool> exitThread(false);
+std::queue<task> taskQueue;
+std::mutex threadMutex;
+std::condition_variable threadCondition;
 
 using namespace std;
 
@@ -30,21 +38,40 @@ void parse(string rawInput, vector<string> &inputCommand){
     }
 }
 
+void threadExec(){
+    
+    while(!exitThread){
+        task threadTask;
+        {
+            unique_lock<mutex> lock(threadMutex);
+            threadCondition.wait(lock, [&]{ return !taskQueue.empty(); });
+            if(exitThread){
+                break;
+            }
+
+            threadTask = taskQueue.front();
+            taskQueue.pop();
+        }
+        handleClient(threadTask);
+    }
+}
+
 int main() {
 
-    int epollClientFd;
-    int epollServerFd;
+    lbSocket lbClientSocket;
     epoll_event *epollClientFdArray;
     epoll_event *epollServerFdArray;
-    lbSocket lbClientSocket;
+    map<int,int> *serverMap;
 
-    epollClientFd = epoll_create1(0);
+    serverMap = new map<int,int>;
+
+    const int epollClientFd = epoll_create1(0);
     if(epollClientFd == -1){
         cerr << "error creating epoll";
         return -1;
     }
 
-    epollServerFd = epoll_create1(0);
+    const int epollServerFd = epoll_create1(0);
     if(epollServerFd == -1){
         cerr << "error creating epoll";
         return -1;
@@ -55,20 +82,14 @@ int main() {
     
     setupClientListener(lbClientSocket, LB_CLIENT_PORT, epollClientFd);
 
-    thread clientThread(monitorClientFd,
-            lbClientSocket,
-            epollClientFd,
-            epollClientFdArray);
-
-    thread serverThread(monitorServerFd,
-            epollServerFd,
-            epollServerFdArray);
+    thread clientThread(monitorClientFd, lbClientSocket, epollClientFd, epollClientFdArray);
+    thread serverThread(monitorServerFd, serverMap, epollServerFd, epollServerFdArray);
     
     thread workerThreads[4] = {
-        thread(threadExec, epollServerFd),
-        thread(threadExec, epollServerFd),
-        thread(threadExec, epollServerFd),
-        thread(threadExec, epollServerFd)
+        thread(threadExec),
+        thread(threadExec),
+        thread(threadExec),
+        thread(threadExec)
     };
 
     while(true){
@@ -81,6 +102,13 @@ int main() {
         parse(rawInput, inputCommand);
 
         if(inputCommand[0] == "exit"){
+            exitThread = true;
+            threadCondition.notify_all();
+            serverThread.detach();
+            clientThread.detach();
+            for(int i=0; i<4; i++){
+                workerThreads[i].join();
+            }
             cout << "bye\n";
             exit(0);
         }
