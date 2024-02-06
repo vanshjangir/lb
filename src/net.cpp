@@ -95,7 +95,13 @@ int connectToServer(
     return server.fd;
 }
 
-int monitorClientFd(lbSocket conn, int epollClientFd, epoll_event epollFdArray[]){
+int monitorClientFd(
+        lbSocket conn,
+        int epollClientFd,
+        int epollServerFd,
+        epoll_event epollFdArray[],
+        map<int,int> *serverMap)
+{
 
     while(true){
         
@@ -104,22 +110,28 @@ int monitorClientFd(lbSocket conn, int epollClientFd, epoll_event epollFdArray[]
         
         int numEvents = epoll_wait(epollClientFd, epollFdArray, 1000, -1);
         if(numEvents == -1){
-            cout << "epoll wait error\n";
+            cout << "epoll wait error monitor client\n";
             return -1;
         }
 
         for(int i=0; i<numEvents; i++){
+            
             if(epollFdArray[i].data.fd == conn.fd){
                 connectNewClient(conn, epollClientFd);
             }
             else if(epollFdArray[i].events & EPOLLIN){
-                task threadTask;
-                threadTask.fd = epollFdArray[i].data.fd;
-                threadTask.type = LB_REQUEST;
+
+                task queueTask;
+                queueTask.type = LB_REQUEST;
+                queueTask.fd = epollFdArray[i].data.fd;
+                queueTask.epollServerFd = epollServerFd;
+                queueTask.serverMap = serverMap;
+
                 {
                     unique_lock<mutex> lock(threadMutex);
-                    taskQueue.push(threadTask);
+                    taskQueue.push(queueTask);
                 }
+
                 threadCondition.notify_one();
             }
             else if(epollFdArray[i].events & EPOLLRDHUP){
@@ -130,7 +142,11 @@ int monitorClientFd(lbSocket conn, int epollClientFd, epoll_event epollFdArray[]
     return 0;
 }
 
-int monitorServerFd(map<int,int> *serverMap, int epollServerFd, epoll_event epollFdArray[]){
+int monitorServerFd(
+        int epollServerFd,
+        epoll_event epollFdArray[],
+        map<int,int> *serverMap)
+{
 
     while(true){
 
@@ -139,21 +155,24 @@ int monitorServerFd(map<int,int> *serverMap, int epollServerFd, epoll_event epol
 
         int numEvents = epoll_wait(epollServerFd, epollFdArray, 1000, -1);
         if(numEvents == -1){
-            cout << "epoll wait error\n";
+            cout << "epoll wait error server fd\n";
             return -1;
         }
 
         for(int i=0; i<numEvents; i++){
+            
             if(epollFdArray[i].events & EPOLLIN){
-                task threadTask;
-                threadTask.fd = epollFdArray[i].data.fd;
-                threadTask.type = LB_RESPONSE;
-                threadTask.serverInfo.first = epollServerFd;
-                threadTask.serverInfo.second = serverMap;
+                task queueTask;
+                queueTask.type = LB_RESPONSE;
+                queueTask.fd = epollFdArray[i].data.fd;
+                queueTask.epollServerFd = epollServerFd;
+                queueTask.serverMap = serverMap;
+                
                 {
                     unique_lock<mutex> lock(threadMutex);
-                    taskQueue.push(threadTask);
+                    taskQueue.push(queueTask);
                 }
+
                 threadCondition.notify_one();
             }
             else if(epollFdArray[i].events & EPOLLRDHUP){

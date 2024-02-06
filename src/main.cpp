@@ -41,7 +41,7 @@ void parse(string rawInput, vector<string> &inputCommand){
 void threadExec(){
     
     while(!exitThread){
-        task threadTask;
+        task qtask;
         {
             unique_lock<mutex> lock(threadMutex);
             threadCondition.wait(lock, [&]{ return !taskQueue.empty(); });
@@ -49,10 +49,10 @@ void threadExec(){
                 break;
             }
 
-            threadTask = taskQueue.front();
+            qtask = taskQueue.front();
             taskQueue.pop();
         }
-        handleClient(threadTask);
+        handleTask(qtask);
     }
 }
 
@@ -82,8 +82,19 @@ int main() {
     
     setupClientListener(lbClientSocket, LB_CLIENT_PORT, epollClientFd);
 
-    thread clientThread(monitorClientFd, lbClientSocket, epollClientFd, epollClientFdArray);
-    thread serverThread(monitorServerFd, serverMap, epollServerFd, epollServerFdArray);
+    thread clientThread(
+            monitorClientFd,
+            lbClientSocket,
+            epollClientFd,
+            epollServerFd,
+            epollClientFdArray,
+            serverMap);
+
+    thread serverThread(
+            monitorServerFd,
+            epollServerFd,
+            epollServerFdArray,
+            serverMap);
     
     thread workerThreads[4] = {
         thread(threadExec),
@@ -102,10 +113,12 @@ int main() {
         parse(rawInput, inputCommand);
 
         if(inputCommand[0] == "exit"){
+
             exitThread = true;
             threadCondition.notify_all();
-            serverThread.detach();
-            clientThread.detach();
+            serverThread.join();
+            clientThread.join();
+
             for(int i=0; i<4; i++){
                 workerThreads[i].join();
             }

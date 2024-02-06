@@ -15,7 +15,8 @@ enum taskType{
 struct task{
     int fd;
     taskType type;
-    std::pair<int,std::map<int,int>*> serverInfo;
+    int epollServerFd;
+    std::map<int,int> *serverMap;
 };
 
 extern std::atomic<bool> exitThread;

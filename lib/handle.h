@@ -3,9 +3,9 @@
 
 #include <string>
 #include <map>
-#include "net.h"
+#include "lb.h"
 
-void handleClient(task);
+void handleTask(task);
 int sendToServer(char*, int, task&); 
 int sendToClient(char*, int);
 int addClientFdHeader(char*, int);

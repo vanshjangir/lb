@@ -29,8 +29,8 @@ struct lbSocket{
     socklen_t addrlen;
 };
 
-int monitorClientFd(lbSocket, int, epoll_event*);
-int monitorServerFd(std::map<int,int>*, int, epoll_event*);
+int monitorClientFd(lbSocket, int, int, epoll_event*, std::map<int,int>*);
+int monitorServerFd(int, epoll_event*, std::map<int,int>*);
 int setupClientListener(lbSocket&, int, int);
 int connectToServer(char*, int, int, std::map<int,int>*);
 int connectNewClient(lbSocket&, int);

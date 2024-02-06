@@ -8,22 +8,22 @@
 
 using namespace std;
 
-void handleClient(task threadTask){
+void handleTask(task qtask){
     
     char buffer[MAX_RECV_SIZE +1];
     ssize_t bytes_received = 0;
 
     bytes_received = recv(
-            threadTask.fd,
+            qtask.fd,
             buffer,
             MAX_RECV_SIZE,
             0);
 
-    if(threadTask.type == LB_REQUEST){
-        sendToServer(buffer, bytes_received, threadTask);
+    if(qtask.type == LB_REQUEST){
+        sendToServer(buffer, bytes_received, qtask);
     }else{
         sendToClient(buffer, bytes_received);
-        close(threadTask.fd);
+        close(qtask.fd);
     }
 }
 
@@ -57,7 +57,7 @@ int getClientResponseFd(char buffer[], int length){
     return fd;
 }
 
-int sendToServer(char *buffer, int length, task& threadTask){
+int sendToServer(char *buffer, int length, task& clientTask){
 
     int fd;
     int firstChunkLength;
@@ -68,8 +68,8 @@ int sendToServer(char *buffer, int length, task& threadTask){
     fd = connectToServer(
             serverIP,
             3000,
-            threadTask.serverInfo.first,
-            threadTask.serverInfo.second);
+            clientTask.epollServerFd,
+            clientTask.serverMap);
 
     firstChunkLength = 0;
     while(true){
@@ -85,7 +85,7 @@ int sendToServer(char *buffer, int length, task& threadTask){
         return -1;
     }
 
-    addClientFdHeader(clientFdHeader, threadTask.fd);
+    addClientFdHeader(clientFdHeader, clientTask.fd);
     bytes_sent = send(fd, clientFdHeader, CUSTOM_HEADER_SIZE, 0);
     if(bytes_sent <= 0){
         return -1;
