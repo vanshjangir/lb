@@ -21,7 +21,8 @@ void handleTask(task qtask){
 
     if(qtask.type == LB_REQUEST){
         sendToServer(buffer, bytes_received, qtask);
-    }else{
+    }
+    else if(qtask.type == LB_RESPONSE){
         sendToClient(buffer, bytes_received);
         close(qtask.fd);
     }

@@ -15,10 +15,12 @@ std::atomic<bool> exitThread(false);
 std::queue<task> taskQueue;
 std::mutex threadMutex;
 std::condition_variable threadCondition;
+int LOG_VERBOSITY = 0;
 
 using namespace std;
 
-void parse(string rawInput, vector<string> &inputCommand){
+/* Parse the input char array into a vector of strings*/
+void parse_input(string rawInput, vector<string> &inputArgs){
 
     for(int i=0; i<(int)rawInput.size(); i++){
         int counter = 0;
@@ -34,7 +36,7 @@ void parse(string rawInput, vector<string> &inputCommand){
             counter++;
             i++;
         }
-        inputCommand.push_back(temp);
+        inputArgs.push_back(temp);
     }
 }
 
@@ -56,30 +58,33 @@ void threadExec(){
     }
 }
 
-int main() {
+int main(int argc, char **argv){
+
+    if(argc>1){
+
+    }
 
     lbSocket lbClientSocket;
     epoll_event *epollClientFdArray;
     epoll_event *epollServerFdArray;
     map<int,int> *serverMap;
-
-    serverMap = new map<int,int>;
-
     const int epollClientFd = epoll_create1(0);
+    const int epollServerFd = epoll_create1(0);
+
     if(epollClientFd == -1){
         cerr << "error creating epoll";
         return -1;
     }
 
-    const int epollServerFd = epoll_create1(0);
     if(epollServerFd == -1){
         cerr << "error creating epoll";
         return -1;
     }
     
+    serverMap = new map<int,int>;
     epollClientFdArray = new epoll_event[1000];
     epollServerFdArray = new epoll_event[1000];
-    
+
     setupClientListener(lbClientSocket, LB_CLIENT_PORT, epollClientFd);
 
     thread clientThread(
@@ -106,30 +111,39 @@ int main() {
     while(true){
         
         string rawInput;
-        vector<string> inputCommand;
-        cout << "\nlb::";
+        vector<string> inputArgs;
+
+        cout << "\nlb[]::";
         getline(cin,rawInput);
         
-        parse(rawInput, inputCommand);
+        parse_input(rawInput, inputArgs);
 
-        if(inputCommand[0] == "exit"){
+        if(inputArgs[0] == "exit"){
 
+            cout << "Exiting...";
             exitThread = true;
+            {
+                task dummy;
+                dummy.type = LB_DUMMY;
+                unique_lock<mutex> lock(threadMutex);
+                taskQueue.push(dummy);
+            }
             threadCondition.notify_all();
-            serverThread.join();
-            clientThread.join();
+            serverThread.detach();
+            clientThread.detach();
 
             for(int i=0; i<4; i++){
                 workerThreads[i].join();
             }
+
             cout << "bye\n";
             exit(0);
         }
-        else if(inputCommand[0] == "list"){
+        else if(inputArgs[0] == "list"){
             // list the connected servers
         }
         else{
-            cout << inputCommand[0] << endl;
+            cout << "invalid command" << endl;
         }
     }
 }

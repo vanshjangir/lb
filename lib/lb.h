@@ -10,6 +10,7 @@
 enum taskType{
     LB_REQUEST,
     LB_RESPONSE,
+    LB_DUMMY
 };
 
 struct task{
