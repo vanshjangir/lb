@@ -40,21 +40,19 @@ int connectNewClient(lbSocket &conn, int epollClientFd){
     return 0;
 }
 
-int connectToServer(
-        char serverIP[],
-        int port,
-        int epollServerFd,
-        map<int,int> *serverMap)
-{
+int connectToServer(ServerPool *pPool){
     int rc;
     int flags;
     lbSocket server;
+    char ip[16];
     epoll_event epollEvent;
+
+    pPool->nextIP(ip);
 
     server.addrlen = sizeof(server.addr);
     server.addr.sin_family = AF_INET;
-    server.addr.sin_addr.s_addr = inet_addr(serverIP);
-    server.addr.sin_port = htons(port);
+    server.addr.sin_addr.s_addr = inet_addr(ip);
+    server.addr.sin_port = htons(3000);
 
     server.fd = socket(AF_INET, SOCK_STREAM, 0);
     if(server.fd == -1){
@@ -68,7 +66,6 @@ int connectToServer(
             server.addrlen
             );
     if(rc == 0){
-        (*serverMap)[server.fd] = LB_SERVER_ALIVE;
         cout << "connected properly with " << server.fd << endl;
     }else{
         cout << "unsuccessful\n";
@@ -87,7 +84,7 @@ int connectToServer(
     epollEvent.data.fd = server.fd;
     epollEvent.events = EPOLLIN | EPOLLONESHOT | EPOLLRDHUP;
 
-    rc = epoll_ctl(epollServerFd, EPOLL_CTL_ADD, server.fd, &epollEvent);
+    rc = epoll_ctl(pPool->epollFd, EPOLL_CTL_ADD, server.fd, &epollEvent);
     if(rc == -1){
         close(server.fd);
         return -1;
@@ -99,8 +96,7 @@ int monitorClientFd(
         lbSocket conn,
         int epollClientFd,
         int epollServerFd,
-        epoll_event epollFdArray[],
-        map<int,int> *serverMap)
+        epoll_event epollFdArray[])
 {
 
     while(true){
@@ -124,9 +120,6 @@ int monitorClientFd(
                 task queueTask;
                 queueTask.type = LB_REQUEST;
                 queueTask.fd = epollFdArray[i].data.fd;
-                queueTask.epollServerFd = epollServerFd;
-                queueTask.serverMap = serverMap;
-
                 {
                     unique_lock<mutex> lock(threadMutex);
                     taskQueue.push(queueTask);
@@ -142,18 +135,14 @@ int monitorClientFd(
     return 0;
 }
 
-int monitorServerFd(
-        int epollServerFd,
-        epoll_event epollFdArray[],
-        map<int,int> *serverMap)
-{
+int monitorServerFd(ServerPool *pPool){
 
     while(true){
 
         if(exitThread)
             break;
 
-        int numEvents = epoll_wait(epollServerFd, epollFdArray, 1000, -1);
+        int numEvents = epoll_wait(pPool->epollFd, pPool->eventArray, 1000, -1);
         if(numEvents == -1){
             cout << "epoll wait error server fd\n";
             return -1;
@@ -161,12 +150,10 @@ int monitorServerFd(
 
         for(int i=0; i<numEvents; i++){
             
-            if(epollFdArray[i].events & EPOLLIN){
+            if(pPool->eventArray[i].events & EPOLLIN){
                 task queueTask;
                 queueTask.type = LB_RESPONSE;
-                queueTask.fd = epollFdArray[i].data.fd;
-                queueTask.epollServerFd = epollServerFd;
-                queueTask.serverMap = serverMap;
+                queueTask.fd = pPool->eventArray[i].data.fd;
                 
                 {
                     unique_lock<mutex> lock(threadMutex);
@@ -175,7 +162,7 @@ int monitorServerFd(
 
                 threadCondition.notify_one();
             }
-            else if(epollFdArray[i].events & EPOLLRDHUP){
+            else if(pPool->eventArray[i].events & EPOLLRDHUP){
                 cout << "disconnected\n";
             }
         }

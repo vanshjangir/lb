@@ -32,16 +32,16 @@ struct lbSocket{
 };
 
 /* monitor a socket for events happening with client connection */
-int monitorClientFd(lbSocket, int, int, epoll_event*, std::map<int,int>*);
+int monitorClientFd(lbSocket, int, int, epoll_event*);
 
 /* monitor a socket for events happening with server connection */
-int monitorServerFd(int, epoll_event*, std::map<int,int>*);
+int monitorServerFd(ServerPool *pPool);
     
 /* setup a socket to listen for client connections */
 int setupClientListener(lbSocket&, int, int);
 
 /* connect a server to the load balancer */
-int connectToServer(char*, int, int, std::map<int,int>*);
+int connectToServer(ServerPool *pPool);
 
 /* connect a client to the load balancer */
 int connectNewClient(lbSocket&, int);

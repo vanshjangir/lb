@@ -8,7 +8,7 @@
 
 using namespace std;
 
-void handleTask(task qtask){
+void handleTask(task qtask, ServerPool *pPool){
     
     char buffer[MAX_RECV_SIZE +1];
     ssize_t bytes_received = 0;
@@ -20,7 +20,7 @@ void handleTask(task qtask){
             0);
 
     if(qtask.type == LB_REQUEST){
-        sendToServer(buffer, bytes_received, qtask);
+        sendToServer(buffer, bytes_received, qtask, pPool);
     }
     else if(qtask.type == LB_RESPONSE){
         sendToClient(buffer, bytes_received);
@@ -28,10 +28,10 @@ void handleTask(task qtask){
     }
 }
 
-int sendToClient(char buffer[], int length){
+int sendToClient(char buffer[], int buflen){
     ssize_t bytes_sent;
-    int fd = getClientResponseFd(buffer, length);
-    bytes_sent = send(fd,buffer,length,0);
+    int fd = getClientResponseFd(buffer, buflen);
+    bytes_sent = send(fd,buffer,buflen,0);
     close(fd);
     return bytes_sent;
 }
@@ -58,7 +58,7 @@ int getClientResponseFd(char buffer[], int length){
     return fd;
 }
 
-int sendToServer(char *buffer, int length, task& clientTask){
+int sendToServer(char *buffer, int buflen, task& clientTask, ServerPool *pPool){
 
     int fd;
     int firstChunkLength;
@@ -66,11 +66,7 @@ int sendToServer(char *buffer, int length, task& clientTask){
     char clientFdHeader[15];
     ssize_t bytes_sent;
 
-    fd = connectToServer(
-            serverIP,
-            3000,
-            clientTask.epollServerFd,
-            clientTask.serverMap);
+    fd = connectToServer(pPool);
 
     firstChunkLength = 0;
     while(true){
@@ -95,7 +91,7 @@ int sendToServer(char *buffer, int length, task& clientTask){
     bytes_sent = send(
             fd,
             buffer+firstChunkLength+2,
-            length-firstChunkLength-2,
+            buflen-firstChunkLength-2,
             0);
     if(bytes_sent <= 0){
         return -1;

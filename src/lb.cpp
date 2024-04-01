@@ -19,28 +19,24 @@ int LOG_VERBOSITY = 0;
 
 using namespace std;
 
-/* Parse the input char array into a vector of strings*/
+/* Parse the input char array into a vector of strings */
 void parse_input(string rawInput, vector<string> &inputArgs){
 
     for(int i=0; i<(int)rawInput.size(); i++){
-        int counter = 0;
-        string temp;
+        string temp = "";
 
         while(true){
-            if(rawInput[counter] == ' ' || i == (int)rawInput.size()){
-                i++;
+            if(rawInput[i] == ' ' || i == (int)rawInput.size()){
                 break;
             }
-
             temp += rawInput[i];
-            counter++;
             i++;
         }
         inputArgs.push_back(temp);
     }
 }
 
-void threadExec(){
+void threadExec(ServerPool *pPool){
     
     while(!exitThread){
         task qtask;
@@ -54,8 +50,85 @@ void threadExec(){
             qtask = taskQueue.front();
             taskQueue.pop();
         }
-        handleTask(qtask);
+        handleTask(qtask, pPool);
     }
+}
+
+ServerPool::ServerPool(){
+    mTable.push_back({"127.0.0.1", 3});
+    mTable.push_back({"127.0.0.1", 1});
+    mCurIndex = 0;
+    mCurWeight = 3;
+}
+
+void ServerPool::nextIP(char *serverIP){
+    if(mCurWeight <= 0){
+        mCurIndex = (mCurIndex+1)%(mTable.size());
+        mCurWeight = mTable[mCurIndex].second;
+    }
+
+    int i;
+    for(i=0; i<mTable[mCurIndex].first.size(); i++){
+        serverIP[i] = mTable[mCurIndex].first[i];
+    }
+    serverIP[i] = '\0';
+    mCurWeight--;
+}
+
+void ServerPool::listServer(){
+    cout << "\nIP Address" << "\t" << "Weight" << endl;
+    for(int i=0; i<mTable.size(); i++){
+        cout << mTable[i].first << "\t" << mTable[i].second << endl;
+    }
+}
+
+void ServerPool::addServer(const char *serverIP, int weight){
+
+    /* testing the server before pushing,
+     * not implemented yet
+     */
+
+    string s(serverIP);
+    mTable.push_back({s,weight});
+}
+
+int runLB(ServerPool &pool ,thread &serverThread, thread &clientThread, thread workerThreads[]){
+
+    lbSocket lbClientSocket;
+    epoll_event *epollClientFdArray;
+
+    const int epollClientFd = epoll_create1(0);
+    if(epollClientFd == -1){
+        cerr << "error creating epoll";
+        return -1;
+    }
+
+    pool.epollFd = epoll_create1(0);
+    if(pool.epollFd == -1){
+        cerr << "error creating epoll";
+        return -1;
+    }
+    
+    pool.eventArray = new epoll_event[MAX_SERVER_LIMIT];
+    epollClientFdArray = new epoll_event[MAX_CLIENT_LIMIT];
+
+    setupClientListener(lbClientSocket, LB_CLIENT_PORT, epollClientFd);
+
+    clientThread = thread(
+            monitorClientFd,
+            lbClientSocket,
+            epollClientFd,
+            pool.epollFd,
+            epollClientFdArray);
+
+    serverThread = thread(monitorServerFd, &pool);
+    
+    workerThreads[0] = thread(threadExec, &pool);
+    workerThreads[1] = thread(threadExec, &pool);
+    workerThreads[2] = thread(threadExec, &pool);
+    workerThreads[3] = thread(threadExec, &pool);
+
+    return 0;
 }
 
 int main(int argc, char **argv){
@@ -64,49 +137,10 @@ int main(int argc, char **argv){
 
     }
 
-    lbSocket lbClientSocket;
-    epoll_event *epollClientFdArray;
-    epoll_event *epollServerFdArray;
-    map<int,int> *serverMap;
-    const int epollClientFd = epoll_create1(0);
-    const int epollServerFd = epoll_create1(0);
-
-    if(epollClientFd == -1){
-        cerr << "error creating epoll";
-        return -1;
-    }
-
-    if(epollServerFd == -1){
-        cerr << "error creating epoll";
-        return -1;
-    }
-    
-    serverMap = new map<int,int>;
-    epollClientFdArray = new epoll_event[1000];
-    epollServerFdArray = new epoll_event[1000];
-
-    setupClientListener(lbClientSocket, LB_CLIENT_PORT, epollClientFd);
-
-    thread clientThread(
-            monitorClientFd,
-            lbClientSocket,
-            epollClientFd,
-            epollServerFd,
-            epollClientFdArray,
-            serverMap);
-
-    thread serverThread(
-            monitorServerFd,
-            epollServerFd,
-            epollServerFdArray,
-            serverMap);
-    
-    thread workerThreads[4] = {
-        thread(threadExec),
-        thread(threadExec),
-        thread(threadExec),
-        thread(threadExec)
-    };
+    ServerPool pool;
+    thread serverThread;
+    thread clientThread;
+    thread workerThreads[4];
 
     while(true){
         
@@ -139,8 +173,25 @@ int main(int argc, char **argv){
             cout << "bye\n";
             exit(0);
         }
+        else if(inputArgs[0] == "run"){
+            int rc;
+            rc = runLB(pool, serverThread, clientThread, workerThreads);
+            if(rc == 0){
+                cout << "listening on port 8080...\n";
+            }
+            else{
+                cout << "error running load balancer\n";
+            }
+        }
         else if(inputArgs[0] == "list"){
-            // list the connected servers
+            pool.listServer();            
+        }
+        else if(inputArgs[0] == "add"){
+            if(inputArgs.size() == 3){
+                pool.addServer(inputArgs[1].c_str(), stoi(inputArgs[2]));
+            }else{
+                cout << "not enough arguments\n";
+            }
         }
         else{
             cout << "invalid command" << endl;

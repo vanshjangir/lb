@@ -6,10 +6,10 @@
 #include "lb.h"
 
 /* Handles a task from the task queue */
-void handleTask(task);
+void handleTask(task, ServerPool*);
 
 /* send the recieved client request to the server */
-int sendToServer(char*, int, task&); 
+int sendToServer(char*, int, task&, ServerPool*); 
 
 /* send the received server response to client */
 int sendToClient(char*, int);
