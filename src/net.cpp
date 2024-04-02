@@ -11,11 +11,11 @@
 
 using namespace std;
 
-int connectNewClient(lbSocket &conn, int epollClientFd){
+int connectNewClient(lbSocket &clientSocket, int clientEpollFd){
     lbSocket client;
-    client.fd = accept(conn.fd,
-                reinterpret_cast<sockaddr*>(&conn.addr),
-                &conn.addrlen);
+    client.fd = accept(clientSocket.fd,
+                reinterpret_cast<sockaddr*>(&clientSocket.addr),
+                &clientSocket.addrlen);
 
     if(client.fd != -1){
         int flags = fcntl(client.fd, F_GETFL, 0);
@@ -29,7 +29,7 @@ int connectNewClient(lbSocket &conn, int epollClientFd){
             return -1;
         }
 
-        if(epoll_ctl(epollClientFd, EPOLL_CTL_ADD, 
+        if(epoll_ctl(clientEpollFd, EPOLL_CTL_ADD, 
                     client.fd, &epollEvent) == -1){
             cout << "epoll_ctl client error\n";
             close(client.fd);
@@ -45,14 +45,15 @@ int connectToServer(ServerPool *pPool){
     int flags;
     lbSocket server;
     char ip[16];
+    int port;
     epoll_event epollEvent;
 
-    pPool->nextIP(ip);
+    pPool->nextServer(ip, port);
 
     server.addrlen = sizeof(server.addr);
     server.addr.sin_family = AF_INET;
     server.addr.sin_addr.s_addr = inet_addr(ip);
-    server.addr.sin_port = htons(3000);
+    server.addr.sin_port = htons(port);
 
     server.fd = socket(AF_INET, SOCK_STREAM, 0);
     if(server.fd == -1){
@@ -93,10 +94,9 @@ int connectToServer(ServerPool *pPool){
 }
 
 int monitorClientFd(
-        lbSocket conn,
-        int epollClientFd,
-        int epollServerFd,
-        epoll_event epollFdArray[])
+        lbSocket lbClientSocket,
+        int clientEpollFd,
+        epoll_event clientEventArray[])
 {
 
     while(true){
@@ -104,7 +104,7 @@ int monitorClientFd(
         if(exitThread)
             break;
         
-        int numEvents = epoll_wait(epollClientFd, epollFdArray, 1000, -1);
+        int numEvents = epoll_wait(clientEpollFd, clientEventArray, 1000, -1);
         if(numEvents == -1){
             cout << "epoll wait error monitor client\n";
             return -1;
@@ -112,14 +112,14 @@ int monitorClientFd(
 
         for(int i=0; i<numEvents; i++){
             
-            if(epollFdArray[i].data.fd == conn.fd){
-                connectNewClient(conn, epollClientFd);
+            if(clientEventArray[i].data.fd == lbClientSocket.fd){
+                connectNewClient(lbClientSocket, clientEpollFd);
             }
-            else if(epollFdArray[i].events & EPOLLIN){
+            else if(clientEventArray[i].events & EPOLLIN){
 
                 task queueTask;
                 queueTask.type = LB_REQUEST;
-                queueTask.fd = epollFdArray[i].data.fd;
+                queueTask.fd = clientEventArray[i].data.fd;
                 {
                     unique_lock<mutex> lock(threadMutex);
                     taskQueue.push(queueTask);
@@ -127,7 +127,7 @@ int monitorClientFd(
 
                 threadCondition.notify_one();
             }
-            else if(epollFdArray[i].events & EPOLLRDHUP){
+            else if(clientEventArray[i].events & EPOLLRDHUP){
                 cout << "disconnected\n";
             }
         }
@@ -171,56 +171,56 @@ int monitorServerFd(ServerPool *pPool){
 }
 
 
-int setupClientListener(lbSocket &socketInfo, int port, int epollClientFd){
+int setupClientListener(lbSocket &lbClientSocket, int port, int clientEpollFd){
 
     epoll_event epollEvent;
     int flags;
     int reuse = 1;
-    socketInfo.addr.sin_family = AF_INET;
-    socketInfo.addr.sin_port = htons(port);
-    socketInfo.addr.sin_addr.s_addr = INADDR_ANY;
-    socketInfo.addrlen = sizeof(socketInfo.addr);
+    lbClientSocket.addr.sin_family = AF_INET;
+    lbClientSocket.addr.sin_port = htons(port);
+    lbClientSocket.addr.sin_addr.s_addr = INADDR_ANY;
+    lbClientSocket.addrlen = sizeof(lbClientSocket.addr);
     
-    socketInfo.fd = socket(AF_INET, SOCK_STREAM, 0);
+    lbClientSocket.fd = socket(AF_INET, SOCK_STREAM, 0);
 
-    if(socketInfo.fd == -1){
-        cerr << "error creating socket socketInfo";
+    if(lbClientSocket.fd == -1){
+        cerr << "error creating socket lbClientSocket";
         return -1;
     }
     
-    if(setsockopt(socketInfo.fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse))<0){
+    if(setsockopt(lbClientSocket.fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse))<0){
         printf("setting SO_REUSEPORT failed\n");
         exit(-1);
     }
 
-    flags = fcntl(socketInfo.fd, F_GETFL, 0);
+    flags = fcntl(lbClientSocket.fd, F_GETFL, 0);
     flags |= O_NONBLOCK;
     
 
-    if(bind(socketInfo.fd,
-            reinterpret_cast<struct sockaddr*>(&socketInfo.addr),
-            socketInfo.addrlen) != 0){
-        cerr << "bind error socketInfo" << endl;
-        close(socketInfo.fd);
+    if(bind(lbClientSocket.fd,
+            reinterpret_cast<struct sockaddr*>(&lbClientSocket.addr),
+            lbClientSocket.addrlen) != 0){
+        cerr << "bind error lbClientSocket" << endl;
+        close(lbClientSocket.fd);
         return -1;
     }
 
-    if(listen(socketInfo.fd, 10) != 0){
-        cerr << "listen error socketInfo" << endl;
-        close(socketInfo.fd);
+    if(listen(lbClientSocket.fd, 10) != 0){
+        cerr << "listen error lbClientSocket" << endl;
+        close(lbClientSocket.fd);
         return -1;
     }
     
-    if(fcntl(socketInfo.fd, F_SETFL, flags) == -1){
+    if(fcntl(lbClientSocket.fd, F_SETFL, flags) == -1){
         cerr << "fnctl error\n";
         return -1;
     }
     
     epollEvent.events = EPOLLIN;
-    epollEvent.data.fd = socketInfo.fd;
+    epollEvent.data.fd = lbClientSocket.fd;
 
-    if(epoll_ctl(epollClientFd, EPOLL_CTL_ADD, socketInfo.fd, &epollEvent) == -1){
-        cerr << "error_ctl error socketInfo";
+    if(epoll_ctl(clientEpollFd, EPOLL_CTL_ADD, lbClientSocket.fd, &epollEvent) == -1){
+        cerr << "error_ctl error lbClientSocket";
         return -1;
     }
     return 0;

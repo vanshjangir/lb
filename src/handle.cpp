@@ -36,11 +36,11 @@ int sendToClient(char buffer[], int buflen){
     return bytes_sent;
 }
 
-int getClientResponseFd(char buffer[], int length){
+int getClientResponseFd(char buffer[], int buflen){
     
     int fd = 0;
     char *loc = NULL;
-    for(int i=0; i<length-2; i++){
+    for(int i=0; i<buflen-2; i++){
         if(buffer[i] == 'f' && buffer[i+1] == 'd' && buffer[i+2] == ':'){
             loc = buffer+(i+4);
             break;
@@ -62,7 +62,6 @@ int sendToServer(char *buffer, int buflen, task& clientTask, ServerPool *pPool){
 
     int fd;
     int firstChunkLength;
-    char serverIP[16] = "127.0.0.1";
     char clientFdHeader[15];
     ssize_t bytes_sent;
 

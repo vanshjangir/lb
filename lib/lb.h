@@ -6,16 +6,26 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <string>
+#include <thread>
 #include <sys/epoll.h>
 
 #define MAX_SERVER_LIMIT 100
 #define MAX_CLIENT_LIMIT 1000
 
+struct ServerProp{
+    std::string ip;
+    int port;
+    int weight;
+    int avgLatency;
+
+    ServerProp(std::string ip, int port, int weight, int avgLatency);
+};
 
 class ServerPool{
 
     private:
-    std::vector<std::pair<std::string,int>> mTable;
+    std::vector<ServerProp> mTable;
     int mCurIndex;
     int mCurWeight;
 
@@ -26,11 +36,13 @@ class ServerPool{
 
     ServerPool();
 
-    void nextIP(char *serverIP);
+    void nextServer(char *serverIP, int &port);
 
-    void addServer(const char *serverIP, int weight);
+    void addServer(const char *serverIP, int port, int weight);
 
     void listServer();
+    
+    bool checkHealth();
 };
 
 enum taskType{
@@ -50,5 +62,10 @@ extern std::mutex threadMutex;
 extern std::condition_variable threadCondition;
 
 void threadExec(ServerPool *pPool);
+
+void lbExit(
+        std::thread &serverThread,
+        std::thread &clientThread,
+        std::thread workerThreads[]);
 
 #endif // !LB_H

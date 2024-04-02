@@ -15,9 +15,70 @@ std::atomic<bool> exitThread(false);
 std::queue<task> taskQueue;
 std::mutex threadMutex;
 std::condition_variable threadCondition;
-int LOG_VERBOSITY = 0;
+
+bool _IS_RUNNING = false;
 
 using namespace std;
+
+ServerProp::ServerProp(string ip, int port, int weight, int avgLatency){
+    this->ip = ip;
+    this->port = port;
+    this->weight = weight;
+    this->avgLatency = avgLatency;
+}
+
+ServerPool::ServerPool(){
+    // for testing
+    mTable.push_back({"127.0.0.1", 3000, 1, -1});
+    mTable.push_back({"127.0.0.1", 2000, 1, -1});
+    // for testing 
+
+
+    mCurIndex = 0;
+    mCurWeight = mTable[0].weight;
+}
+
+bool ServerPool::checkHealth(){
+    if(mTable.size() <= 0)
+        return false;
+    else
+        return true;
+}
+
+void ServerPool::nextServer(char *serverIP, int &port){
+    if(mCurWeight <= 0){
+        mCurIndex = (mCurIndex+1)%(mTable.size());
+        mCurWeight = mTable[mCurIndex].weight;
+    }
+
+    int i;
+    for(i=0; i<mTable[mCurIndex].ip.size(); i++){
+        serverIP[i] = mTable[mCurIndex].ip[i];
+    }
+    serverIP[i] = '\0';
+    port = mTable[mCurIndex].port;
+    mCurWeight--;
+}
+
+void ServerPool::listServer(){
+    cout << "\nIP Address\tPort\tWeight" << endl;
+    for(int i=0; i<mTable.size(); i++){
+        cout << mTable[i].ip << "\t";
+        cout << mTable[i].port << "\t";
+        cout << mTable[i].weight << endl;
+    }
+}
+
+void ServerPool::addServer(const char *serverIP, int port, int weight){
+
+    /* testing the server before pushing,
+     * not implemented yet
+     */
+
+    string s(serverIP);
+    ServerProp newServer(s, port, weight, -1);
+    mTable.push_back(newServer);
+}
 
 /* Parse the input char array into a vector of strings */
 void parse_input(string rawInput, vector<string> &inputArgs){
@@ -54,51 +115,17 @@ void threadExec(ServerPool *pPool){
     }
 }
 
-ServerPool::ServerPool(){
-    mTable.push_back({"127.0.0.1", 3});
-    mTable.push_back({"127.0.0.1", 1});
-    mCurIndex = 0;
-    mCurWeight = 3;
-}
-
-void ServerPool::nextIP(char *serverIP){
-    if(mCurWeight <= 0){
-        mCurIndex = (mCurIndex+1)%(mTable.size());
-        mCurWeight = mTable[mCurIndex].second;
-    }
-
-    int i;
-    for(i=0; i<mTable[mCurIndex].first.size(); i++){
-        serverIP[i] = mTable[mCurIndex].first[i];
-    }
-    serverIP[i] = '\0';
-    mCurWeight--;
-}
-
-void ServerPool::listServer(){
-    cout << "\nIP Address" << "\t" << "Weight" << endl;
-    for(int i=0; i<mTable.size(); i++){
-        cout << mTable[i].first << "\t" << mTable[i].second << endl;
-    }
-}
-
-void ServerPool::addServer(const char *serverIP, int weight){
-
-    /* testing the server before pushing,
-     * not implemented yet
-     */
-
-    string s(serverIP);
-    mTable.push_back({s,weight});
-}
-
-int runLB(ServerPool &pool ,thread &serverThread, thread &clientThread, thread workerThreads[]){
-
+int runLB(
+        ServerPool &pool,
+        thread &serverThread,
+        thread &clientThread,
+        thread workerThreads[])
+{
     lbSocket lbClientSocket;
-    epoll_event *epollClientFdArray;
+    epoll_event *clientEventArray;
 
-    const int epollClientFd = epoll_create1(0);
-    if(epollClientFd == -1){
+    const int clientEpollFd = epoll_create1(0);
+    if(clientEpollFd == -1){
         cerr << "error creating epoll";
         return -1;
     }
@@ -110,16 +137,15 @@ int runLB(ServerPool &pool ,thread &serverThread, thread &clientThread, thread w
     }
     
     pool.eventArray = new epoll_event[MAX_SERVER_LIMIT];
-    epollClientFdArray = new epoll_event[MAX_CLIENT_LIMIT];
+    clientEventArray = new epoll_event[MAX_CLIENT_LIMIT];
 
-    setupClientListener(lbClientSocket, LB_CLIENT_PORT, epollClientFd);
+    setupClientListener(lbClientSocket, LB_CLIENT_PORT, clientEpollFd);
 
     clientThread = thread(
             monitorClientFd,
             lbClientSocket,
-            epollClientFd,
-            pool.epollFd,
-            epollClientFdArray);
+            clientEpollFd,
+            clientEventArray);
 
     serverThread = thread(monitorServerFd, &pool);
     
@@ -128,7 +154,40 @@ int runLB(ServerPool &pool ,thread &serverThread, thread &clientThread, thread w
     workerThreads[2] = thread(threadExec, &pool);
     workerThreads[3] = thread(threadExec, &pool);
 
+    _IS_RUNNING = true;
     return 0;
+}
+
+void lbExit(
+        thread &serverThread,
+        thread &clientThread,
+        thread workerThreads[])
+{
+    
+    if(!_IS_RUNNING)
+        goto out;
+    
+    exitThread = true;
+
+    {
+        task dummy;
+        dummy.type = LB_DUMMY;
+        unique_lock<mutex> lock(threadMutex);
+        taskQueue.push(dummy);
+    }
+
+    threadCondition.notify_all();
+    serverThread.detach();
+    clientThread.detach();
+
+    for(int i=0; i<4; i++){
+        workerThreads[i].join();
+    }
+
+out:
+    cout << "Exiting...";
+    cout << "bye\n";
+    exit(0);
 }
 
 int main(int argc, char **argv){
@@ -153,28 +212,16 @@ int main(int argc, char **argv){
         parse_input(rawInput, inputArgs);
 
         if(inputArgs[0] == "exit"){
-
-            cout << "Exiting...";
-            exitThread = true;
-            {
-                task dummy;
-                dummy.type = LB_DUMMY;
-                unique_lock<mutex> lock(threadMutex);
-                taskQueue.push(dummy);
-            }
-            threadCondition.notify_all();
-            serverThread.detach();
-            clientThread.detach();
-
-            for(int i=0; i<4; i++){
-                workerThreads[i].join();
-            }
-
-            cout << "bye\n";
-            exit(0);
+            lbExit(serverThread, clientThread, workerThreads);
         }
         else if(inputArgs[0] == "run"){
             int rc;
+
+            if(!pool.checkHealth()){
+                cout << "zero servers found\n";
+                lbExit(serverThread, clientThread, workerThreads);
+            }
+
             rc = runLB(pool, serverThread, clientThread, workerThreads);
             if(rc == 0){
                 cout << "listening on port 8080...\n";
@@ -187,10 +234,15 @@ int main(int argc, char **argv){
             pool.listServer();            
         }
         else if(inputArgs[0] == "add"){
-            if(inputArgs.size() == 3){
-                pool.addServer(inputArgs[1].c_str(), stoi(inputArgs[2]));
-            }else{
-                cout << "not enough arguments\n";
+            if(inputArgs.size() == 4){
+                pool.addServer(
+                        inputArgs[1].c_str(),
+                        stoi(inputArgs[2]),
+                        stoi(inputArgs[3])
+                        );
+            }
+            else{
+                cout << "incorrect arguments\n";
             }
         }
         else{
