@@ -48,7 +48,7 @@ int connectToServer(ServerPool *pPool){
     int port;
     epoll_event epollEvent;
 
-    pPool->nextServer(ip, port);
+    int sIndex = pPool->nextServer(ip, port);
 
     server.addrlen = sizeof(server.addr);
     server.addr.sin_family = AF_INET;
@@ -60,6 +60,8 @@ int connectToServer(ServerPool *pPool){
         close(server.fd);
         return -1;
     }
+
+    pPool->setTime(sIndex, server.fd);
 
     rc = connect(
             server.fd,

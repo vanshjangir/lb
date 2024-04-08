@@ -20,17 +20,17 @@ bool _IS_RUNNING = false;
 
 using namespace std;
 
-ServerProp::ServerProp(string ip, int port, int weight, int avgLatency){
+ServerProp::ServerProp(string ip, int port, int weight){
     this->ip = ip;
     this->port = port;
     this->weight = weight;
-    this->avgLatency = avgLatency;
+    this->avgLatency = 0;
+    this->nreq = 0;
 }
 
 ServerPool::ServerPool(){
     // for testing
-    mTable.push_back({"127.0.0.1", 3000, 1, -1});
-    mTable.push_back({"127.0.0.1", 2000, 1, -1});
+    mTable.push_back({"127.0.0.1", 3000, 1});
     // for testing 
 
 
@@ -45,7 +45,7 @@ bool ServerPool::checkHealth(){
         return true;
 }
 
-void ServerPool::nextServer(char *serverIP, int &port){
+int ServerPool::nextServer(char *serverIP, int &port){
     if(mCurWeight <= 0){
         mCurIndex = (mCurIndex+1)%(mTable.size());
         mCurWeight = mTable[mCurIndex].weight;
@@ -58,14 +58,16 @@ void ServerPool::nextServer(char *serverIP, int &port){
     serverIP[i] = '\0';
     port = mTable[mCurIndex].port;
     mCurWeight--;
+    return mCurIndex;
 }
 
 void ServerPool::listServer(){
-    cout << "\nIP Address\tPort\tWeight" << endl;
+    cout << "\nIP Address\tPort\tWeight\tLatency(microseconds)" << endl;
     for(int i=0; i<mTable.size(); i++){
         cout << mTable[i].ip << "\t";
         cout << mTable[i].port << "\t";
-        cout << mTable[i].weight << endl;
+        cout << mTable[i].weight << "\t";
+        cout << mTable[i].avgLatency << endl;
     }
 }
 
@@ -76,8 +78,31 @@ void ServerPool::addServer(const char *serverIP, int port, int weight){
      */
 
     string s(serverIP);
-    ServerProp newServer(s, port, weight, -1);
+    ServerProp newServer(s, port, weight);
     mTable.push_back(newServer);
+}
+
+void ServerPool::setTime(int index, int fd){
+    mTable[index].curtime = chrono::high_resolution_clock::now();
+    mTable[index].nreq++;
+}
+
+void ServerPool::setLatency(int fd){
+    auto end = chrono::high_resolution_clock::now();
+    int index = mFdToServer[fd];
+    if(mTable[index].avgLatency == 0){
+        mTable[index].avgLatency = chrono::duration_cast<std::chrono::microseconds>
+            (end - mTable[index].curtime).count();
+    }
+    else{
+        int nreq = mTable[index].nreq;
+        int avgLatency = mTable[index].avgLatency;
+        mTable[index].avgLatency = (
+                avgLatency*(nreq-1) +
+                chrono::duration_cast<std::chrono::microseconds>
+                (end - mTable[index].curtime).count()
+                )/(nreq);
+    }
 }
 
 /* Parse the input char array into a vector of strings */

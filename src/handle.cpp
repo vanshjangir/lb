@@ -2,6 +2,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <chrono>
 
 #include "../lib/net.h"
 #include "../lib/handle.h"
@@ -24,6 +25,7 @@ void handleTask(task qtask, ServerPool *pPool){
     }
     else if(qtask.type == LB_RESPONSE){
         sendToClient(buffer, bytes_received);
+        pPool->setLatency(qtask.fd);
         close(qtask.fd);
     }
 }

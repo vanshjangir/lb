@@ -6,6 +6,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <map>
 #include <string>
 #include <thread>
 #include <sys/epoll.h>
@@ -18,14 +19,17 @@ struct ServerProp{
     int port;
     int weight;
     int avgLatency;
+    int nreq;
+    std::chrono::time_point<std::chrono::high_resolution_clock> curtime;
 
-    ServerProp(std::string ip, int port, int weight, int avgLatency);
+    ServerProp(std::string ip, int port, int weight);
 };
 
 class ServerPool{
 
     private:
     std::vector<ServerProp> mTable;
+    std::map<int,int> mFdToServer;
     int mCurIndex;
     int mCurWeight;
 
@@ -36,13 +40,17 @@ class ServerPool{
 
     ServerPool();
 
-    void nextServer(char *serverIP, int &port);
+    int nextServer(char *serverIP, int &port);
 
     void addServer(const char *serverIP, int port, int weight);
 
     void listServer();
     
     bool checkHealth();
+
+    void setTime(int index, int fd);
+
+    void setLatency(int fd);
 };
 
 enum taskType{
