@@ -69,7 +69,7 @@ extern std::queue<task> taskQueue;
 extern std::mutex threadMutex;
 extern std::condition_variable threadCondition;
 
-void threadExec(ServerPool *pPool);
+void threadWorker(ServerPool *pPool);
 
 void lbExit(
         std::thread &serverThread,

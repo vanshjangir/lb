@@ -2,14 +2,19 @@
 #include <string>
 #include <vector>
 #include <sys/epoll.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
 #include <thread>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 #include <atomic>
 
 #include "../lib/net.h"
 #include "../lib/lb.h"
 #include "../lib/handle.h"
+
+#define BUFFER_SIZE 65536
 
 std::atomic<bool> exitThread(false);
 std::queue<task> taskQueue;
@@ -17,6 +22,7 @@ std::mutex threadMutex;
 std::condition_variable threadCondition;
 
 bool _IS_RUNNING = false;
+bool _DSR_ENABLE = false;
 
 using namespace std;
 
@@ -106,7 +112,7 @@ void ServerPool::setLatency(int fd){
 }
 
 /* Parse the input char array into a vector of strings */
-void parse_input(string rawInput, vector<string> &inputArgs){
+void parseCliInput(string rawInput, vector<string> &inputArgs){
 
     for(int i=0; i<(int)rawInput.size(); i++){
         string temp = "";
@@ -122,7 +128,30 @@ void parse_input(string rawInput, vector<string> &inputArgs){
     }
 }
 
-void threadExec(ServerPool *pPool){
+int parseCmdArgs(char *arg){
+
+    if(arg[0] != '-')
+        goto out;
+
+    switch(arg[1]){
+        case '-':
+            if(strncmp(arg+2, "DSR", 3) == 0){
+                _DSR_ENABLE = true;
+                return 0;
+            }
+            else
+                goto out;
+        default:
+            goto out;
+    }
+    return 0;
+
+out:
+    printf("unexpected argument %s\n", arg);
+    return -1;
+}
+
+void threadWorker(ServerPool *pPool){
     
     while(!exitThread){
         task qtask;
@@ -137,6 +166,67 @@ void threadExec(ServerPool *pPool){
             taskQueue.pop();
         }
         handleTask(qtask, pPool);
+    }
+}
+
+void threadDsr(lbSocket *pRawSocket){
+
+    char buffer[BUFFER_SIZE];
+    struct sockaddr_in destAddr;
+
+    while (1) {
+
+        struct iphdr *ip_header;
+        struct tcphdr *tcp_header;
+        struct iphdr new_ip_header;
+
+        int data_size = recvfrom(
+                pRawSocket->fd, buffer,
+                BUFFER_SIZE,
+                0,
+                (struct sockaddr*)&pRawSocket->addr,
+                &pRawSocket->addrlen);
+
+        if (data_size < 0) {
+            perror("Failed to receive packet");
+            close(pRawSocket->fd);
+            return;
+        }
+
+        ip_header = (struct iphdr *)buffer;
+        tcp_header = (struct tcphdr *)(buffer + ip_header->ihl * 4);
+
+        if(ip_header->protocol != IPPROTO_TCP ||
+                memcmp(
+                    &(pRawSocket->addr.sin_addr),
+                    &(ip_header->daddr),
+                    sizeof(struct in_addr)
+                    ) == 0){
+            continue;
+        }
+
+        memset(&new_ip_header, 0, sizeof(new_ip_header));
+
+        new_ip_header.ihl = 5;
+        new_ip_header.version = 4;
+        new_ip_header.tot_len = htons(data_size + sizeof(struct iphdr));
+        new_ip_header.id = htons(54321);
+        new_ip_header.ttl = 64;
+        new_ip_header.protocol = IPPROTO_IPIP;
+        new_ip_header.saddr = ip_header->saddr;
+        new_ip_header.daddr = inet_addr("");
+
+        memmove(buffer + sizeof(struct iphdr), buffer, data_size);
+        memcpy(buffer, &new_ip_header, sizeof(struct iphdr));
+        memset(&destAddr, 0, sizeof(destAddr));
+
+        destAddr.sin_family = AF_INET;
+        destAddr.sin_addr.s_addr = new_ip_header.daddr;
+
+        sendto(pRawSocket->fd, buffer, data_size + sizeof(struct iphdr), 0,
+               (struct sockaddr *)&destAddr, sizeof(destAddr));
+
+        printf("packet sent\n");
     }
 }
 
@@ -174,22 +264,40 @@ int runLB(
 
     serverThread = thread(monitorServerFd, &pool);
     
-    workerThreads[0] = thread(threadExec, &pool);
-    workerThreads[1] = thread(threadExec, &pool);
-    workerThreads[2] = thread(threadExec, &pool);
-    workerThreads[3] = thread(threadExec, &pool);
+    workerThreads[0] = thread(threadWorker, &pool);
+    workerThreads[1] = thread(threadWorker, &pool);
+    workerThreads[2] = thread(threadWorker, &pool);
+    workerThreads[3] = thread(threadWorker, &pool);
 
     _IS_RUNNING = true;
     return 0;
 }
 
+int runDSR(ServerPool &pool, thread &clientThread){
+
+    lbSocket rawSocket;
+    rawSocket.fd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+    if (rawSocket.fd < 0) {
+        perror("Failed to create socket");
+        return -1;
+    }
+
+    clientThread = thread(threadDsr, &rawSocket);
+    return 0;
+}
+
 void lbExit(
-        thread &serverThread,
-        thread &clientThread,
-        thread workerThreads[])
+        thread *serverThread = NULL,
+        thread *clientThread = NULL,
+        thread workerThreads[] = NULL)
 {
     
-    if(!_IS_RUNNING)
+    if(!_IS_RUNNING || _DSR_ENABLE)
+        goto out;
+
+    if(serverThread == NULL ||
+            clientThread == NULL ||
+            workerThreads == NULL)
         goto out;
     
     exitThread = true;
@@ -202,8 +310,8 @@ void lbExit(
     }
 
     threadCondition.notify_all();
-    serverThread.detach();
-    clientThread.detach();
+    (*serverThread).detach();
+    (*clientThread).detach();
 
     for(int i=0; i<4; i++){
         workerThreads[i].join();
@@ -218,7 +326,10 @@ out:
 int main(int argc, char **argv){
 
     if(argc>1){
-
+        for(int i=1; i<argc; i++){
+            if(parseCmdArgs(argv[i]) != 0)
+                lbExit();
+        }
     }
 
     ServerPool pool;
@@ -234,20 +345,26 @@ int main(int argc, char **argv){
         cout << "\nlb[]::";
         getline(cin,rawInput);
         
-        parse_input(rawInput, inputArgs);
+        parseCliInput(rawInput, inputArgs);
 
         if(inputArgs[0] == "exit"){
-            lbExit(serverThread, clientThread, workerThreads);
+            lbExit(&serverThread, &clientThread, workerThreads);
         }
         else if(inputArgs[0] == "run"){
             int rc;
 
             if(!pool.checkHealth()){
                 cout << "zero servers found\n";
-                lbExit(serverThread, clientThread, workerThreads);
+                lbExit(&serverThread, &clientThread, workerThreads);
             }
 
-            rc = runLB(pool, serverThread, clientThread, workerThreads);
+            if(_DSR_ENABLE){
+                rc = runDSR(pool, clientThread);
+            }
+            else{
+                rc = runLB(pool, serverThread, clientThread, workerThreads);
+            }
+
             if(rc == 0){
                 cout << "listening on port 8080...\n";
             }
