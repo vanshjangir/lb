@@ -2,7 +2,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <chrono>
 
 #include "../lib/net.h"
 #include "../lib/handle.h"
@@ -67,7 +66,7 @@ int sendToServer(char *buffer, int buflen, task& clientTask, ServerPool *pPool){
     char clientFdHeader[15];
     ssize_t bytes_sent;
 
-    fd = connectToServer(pPool);
+    fd = connectToServer(clientTask.fd ,pPool);
 
     firstChunkLength = 0;
     while(true){

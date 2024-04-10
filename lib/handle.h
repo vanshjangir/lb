@@ -2,7 +2,6 @@
 #define HANDLE_H
 
 #include <string>
-#include <map>
 #include "lb.h"
 
 /* Handles a task from the task queue */

@@ -6,13 +6,14 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <unordered_map>
 #include <map>
 #include <string>
 #include <thread>
 #include <sys/epoll.h>
 
-#define MAX_SERVER_LIMIT 100
-#define MAX_CLIENT_LIMIT 1000
+#define MAX_SERVER_LIMIT    100
+#define MAX_CLIENT_LIMIT    1000
 
 struct ServerProp{
     std::string ip;
@@ -25,13 +26,16 @@ struct ServerProp{
     ServerProp(std::string ip, int port, int weight);
 };
 
+typedef std::pair<std::string,int> ClientHash;
+typedef std::pair<std::string,int> ServerHash;
+
 class ServerPool{
 
     private:
     std::vector<ServerProp> mTable;
     std::map<int,int> mFdToServer;
+    std::map<ClientHash, ServerHash> mClientToServer;
     int mCurIndex;
-    int mCurWeight;
 
     public:
 
@@ -40,7 +44,7 @@ class ServerPool{
 
     ServerPool();
 
-    int nextServer(char *serverIP, int &port);
+    int nextServer(ClientHash *pCHash,char *serverIP, int &port);
 
     void addServer(const char *serverIP, int port, int weight);
 
@@ -48,7 +52,7 @@ class ServerPool{
     
     bool checkHealth();
 
-    void setTime(int index, int fd);
+    void setTime(int index);
 
     void setLatency(int fd);
 };
@@ -68,8 +72,11 @@ extern std::atomic<bool> exitThread;
 extern std::queue<task> taskQueue;
 extern std::mutex threadMutex;
 extern std::condition_variable threadCondition;
+extern std::map<int,ClientHash> fdToClient;
 
 void threadWorker(ServerPool *pPool);
+
+void setLOG(std::string s);
 
 void lbExit(
         std::thread &serverThread,

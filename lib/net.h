@@ -9,7 +9,6 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
-#include <map>
 
 #include "lb.h"
 
@@ -17,12 +16,8 @@
 #define MAX_RECV_SIZE       4096
 #define SERVER_PORT         3000
 #define CUSTOM_HEADER_SIZE  14
-
-/* whether server is connected or not */
-enum serverStatus{
-    LB_SERVER_ALIVE,
-    LB_SERVER_DEAD,
-};
+#define RAW_BUFFER_SIZE     65536
+#define VIP                 "144.144.144.144"
 
 /* socket info struct */
 struct lbSocket{
@@ -44,9 +39,12 @@ int monitorServerFd(ServerPool *pPool);
 int setupClientListener(lbSocket &lbClientSocket, int port, int clientEpollFd);
 
 /* connect a server to the load balancer */
-int connectToServer(ServerPool *pPool);
+int connectToServer(int clientFd, ServerPool *pPool);
 
 /* connect a client to the load balancer */
 int connectNewClient(lbSocket &clientSocket, int clientEpollFd);
+
+/* direct server return model */
+void dsr(ServerPool *pPool);
 
 #endif // !NET_H
