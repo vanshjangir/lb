@@ -11,8 +11,8 @@
 #include <thread>
 #include <sys/epoll.h>
 
-#define MAX_SERVER_LIMIT 100
-#define MAX_CLIENT_LIMIT 1000
+#define MAX_SERVER_LIMIT    100
+#define MAX_CLIENT_LIMIT    1000
 
 struct ServerProp{
     std::string ip;

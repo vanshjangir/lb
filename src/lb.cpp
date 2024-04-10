@@ -14,8 +14,6 @@
 #include "../lib/lb.h"
 #include "../lib/handle.h"
 
-#define BUFFER_SIZE 65536
-
 std::atomic<bool> exitThread(false);
 std::queue<task> taskQueue;
 std::mutex threadMutex;
@@ -23,6 +21,7 @@ std::condition_variable threadCondition;
 
 bool _IS_RUNNING = false;
 bool _DSR_ENABLE = false;
+int _NUM_THREADS = 4;
 
 using namespace std;
 
@@ -58,7 +57,7 @@ int ServerPool::nextServer(char *serverIP, int &port){
     }
 
     int i;
-    for(i=0; i<mTable[mCurIndex].ip.size(); i++){
+    for(i=0; i<(int)mTable[mCurIndex].ip.size(); i++){
         serverIP[i] = mTable[mCurIndex].ip[i];
     }
     serverIP[i] = '\0';
@@ -69,7 +68,7 @@ int ServerPool::nextServer(char *serverIP, int &port){
 
 void ServerPool::listServer(){
     cout << "\nIP Address\tPort\tWeight\tLatency(microseconds)" << endl;
-    for(int i=0; i<mTable.size(); i++){
+    for(int i=0; i<(int)mTable.size(); i++){
         cout << mTable[i].ip << "\t";
         cout << mTable[i].port << "\t";
         cout << mTable[i].weight << "\t";
@@ -141,6 +140,8 @@ int parseCmdArgs(char *arg){
             }
             else
                 goto out;
+        case 't':
+            _NUM_THREADS = stoi(arg+2);
         default:
             goto out;
     }
@@ -152,6 +153,11 @@ out:
 }
 
 void threadWorker(ServerPool *pPool){
+
+    if(_DSR_ENABLE){
+        dsr();
+        return;
+    }
     
     while(!exitThread){
         task qtask;
@@ -169,71 +175,10 @@ void threadWorker(ServerPool *pPool){
     }
 }
 
-void threadDsr(lbSocket *pRawSocket){
-
-    char buffer[BUFFER_SIZE];
-    struct sockaddr_in destAddr;
-
-    while (1) {
-
-        struct iphdr *ip_header;
-        struct tcphdr *tcp_header;
-        struct iphdr new_ip_header;
-
-        int data_size = recvfrom(
-                pRawSocket->fd, buffer,
-                BUFFER_SIZE,
-                0,
-                (struct sockaddr*)&pRawSocket->addr,
-                &pRawSocket->addrlen);
-
-        if (data_size < 0) {
-            perror("Failed to receive packet");
-            close(pRawSocket->fd);
-            return;
-        }
-
-        ip_header = (struct iphdr *)buffer;
-        tcp_header = (struct tcphdr *)(buffer + ip_header->ihl * 4);
-
-        if(ip_header->protocol != IPPROTO_TCP ||
-                memcmp(
-                    &(pRawSocket->addr.sin_addr),
-                    &(ip_header->daddr),
-                    sizeof(struct in_addr)
-                    ) == 0){
-            continue;
-        }
-
-        memset(&new_ip_header, 0, sizeof(new_ip_header));
-
-        new_ip_header.ihl = 5;
-        new_ip_header.version = 4;
-        new_ip_header.tot_len = htons(data_size + sizeof(struct iphdr));
-        new_ip_header.id = htons(54321);
-        new_ip_header.ttl = 64;
-        new_ip_header.protocol = IPPROTO_IPIP;
-        new_ip_header.saddr = ip_header->saddr;
-        new_ip_header.daddr = inet_addr("");
-
-        memmove(buffer + sizeof(struct iphdr), buffer, data_size);
-        memcpy(buffer, &new_ip_header, sizeof(struct iphdr));
-        memset(&destAddr, 0, sizeof(destAddr));
-
-        destAddr.sin_family = AF_INET;
-        destAddr.sin_addr.s_addr = new_ip_header.daddr;
-
-        sendto(pRawSocket->fd, buffer, data_size + sizeof(struct iphdr), 0,
-               (struct sockaddr *)&destAddr, sizeof(destAddr));
-
-        printf("packet sent\n");
-    }
-}
-
 int runLB(
-        ServerPool &pool,
-        thread &serverThread,
-        thread &clientThread,
+        ServerPool *pPool,
+        thread *pServerThread,
+        thread *pClientThread,
         thread workerThreads[])
 {
     lbSocket lbClientSocket;
@@ -245,44 +190,41 @@ int runLB(
         return -1;
     }
 
-    pool.epollFd = epoll_create1(0);
-    if(pool.epollFd == -1){
+    pPool->epollFd = epoll_create1(0);
+    if(pPool->epollFd == -1){
         cerr << "error creating epoll";
         return -1;
     }
     
-    pool.eventArray = new epoll_event[MAX_SERVER_LIMIT];
+    pPool->eventArray = new epoll_event[MAX_SERVER_LIMIT];
     clientEventArray = new epoll_event[MAX_CLIENT_LIMIT];
 
     setupClientListener(lbClientSocket, LB_CLIENT_PORT, clientEpollFd);
 
-    clientThread = thread(
+    *(pClientThread) = thread(
             monitorClientFd,
             lbClientSocket,
             clientEpollFd,
             clientEventArray);
 
-    serverThread = thread(monitorServerFd, &pool);
+    *(pServerThread) = thread(monitorServerFd, pPool);
     
-    workerThreads[0] = thread(threadWorker, &pool);
-    workerThreads[1] = thread(threadWorker, &pool);
-    workerThreads[2] = thread(threadWorker, &pool);
-    workerThreads[3] = thread(threadWorker, &pool);
-
+    for(int i=0; i<_NUM_THREADS; i++){
+        workerThreads[i] = thread(threadWorker, pPool);
+    }
+    
     _IS_RUNNING = true;
     return 0;
 }
 
-int runDSR(ServerPool &pool, thread &clientThread){
-
-    lbSocket rawSocket;
-    rawSocket.fd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-    if (rawSocket.fd < 0) {
-        perror("Failed to create socket");
-        return -1;
+int runDSR(ServerPool *pPool, thread workerThreads[]){
+    
+    for(int i=0; i<_NUM_THREADS; i++){
+        workerThreads[i] = thread(threadWorker, pPool);
+        workerThreads[i].detach();
     }
-
-    clientThread = thread(threadDsr, &rawSocket);
+        
+    _IS_RUNNING = true;
     return 0;
 }
 
@@ -292,16 +234,14 @@ void lbExit(
         thread workerThreads[] = NULL)
 {
     
-    if(!_IS_RUNNING || _DSR_ENABLE)
+    if(!_IS_RUNNING)
         goto out;
 
-    if(serverThread == NULL ||
-            clientThread == NULL ||
-            workerThreads == NULL)
+    if(_DSR_ENABLE){
         goto out;
-    
+    }
+
     exitThread = true;
-
     {
         task dummy;
         dummy.type = LB_DUMMY;
@@ -312,15 +252,66 @@ void lbExit(
     threadCondition.notify_all();
     (*serverThread).detach();
     (*clientThread).detach();
-
-    for(int i=0; i<4; i++){
+    
+    for(int i=0; i<4; i++)
         workerThreads[i].join();
-    }
 
 out:
-    cout << "Exiting...";
-    cout << "bye\n";
+    cout << "Exiting...\n";
     exit(0);
+}
+
+void cli(
+        ServerPool *pPool,
+        thread *pClientThread,
+        thread *pServerThread,
+        thread workerThreads[])
+{
+    string rawInput;
+    vector<string> inputArgs;
+
+    cout << "\nlb[]::";
+    getline(cin,rawInput);
+    
+    parseCliInput(rawInput, inputArgs);
+
+    if(inputArgs[0] == "exit"){
+        lbExit(pServerThread, pClientThread, workerThreads);
+    }
+    else if(inputArgs[0] == "run"){
+
+        int rc;
+        if(!pPool->checkHealth()){
+            cout << "zero servers found\n";
+            lbExit(pServerThread, pClientThread, workerThreads);
+        }
+
+        if(_DSR_ENABLE)
+            rc = runDSR(pPool, workerThreads);
+        else
+            rc = runLB(pPool, pServerThread, pClientThread, workerThreads);
+
+        if(rc != 0)
+            cout << "error running load balancer\n";
+    }
+    else if(inputArgs[0] == "list"){
+        pPool->listServer();
+    }
+    else if(inputArgs[0] == "add"){
+        if(inputArgs.size() == 4){
+            pPool->addServer(
+                    inputArgs[1].c_str(),
+                    stoi(inputArgs[2]),
+                    stoi(inputArgs[3])
+                    );
+        }
+        else{
+            cout << "incorrect arguments\n";
+        }
+    }
+    else{
+        cout << "invalid command" << endl;
+    }
 }
 
 int main(int argc, char **argv){
@@ -331,64 +322,22 @@ int main(int argc, char **argv){
                 lbExit();
         }
     }
-
+    
     ServerPool pool;
-    thread serverThread;
-    thread clientThread;
     thread workerThreads[4];
 
-    while(true){
-        
-        string rawInput;
-        vector<string> inputArgs;
-
-        cout << "\nlb[]::";
-        getline(cin,rawInput);
-        
-        parseCliInput(rawInput, inputArgs);
-
-        if(inputArgs[0] == "exit"){
-            lbExit(&serverThread, &clientThread, workerThreads);
+    if(_DSR_ENABLE){
+        while(true){
+            cli(&pool, NULL, NULL, workerThreads);
         }
-        else if(inputArgs[0] == "run"){
-            int rc;
-
-            if(!pool.checkHealth()){
-                cout << "zero servers found\n";
-                lbExit(&serverThread, &clientThread, workerThreads);
-            }
-
-            if(_DSR_ENABLE){
-                rc = runDSR(pool, clientThread);
-            }
-            else{
-                rc = runLB(pool, serverThread, clientThread, workerThreads);
-            }
-
-            if(rc == 0){
-                cout << "listening on port 8080...\n";
-            }
-            else{
-                cout << "error running load balancer\n";
-            }
-        }
-        else if(inputArgs[0] == "list"){
-            pool.listServer();            
-        }
-        else if(inputArgs[0] == "add"){
-            if(inputArgs.size() == 4){
-                pool.addServer(
-                        inputArgs[1].c_str(),
-                        stoi(inputArgs[2]),
-                        stoi(inputArgs[3])
-                        );
-            }
-            else{
-                cout << "incorrect arguments\n";
-            }
-        }
-        else{
-            cout << "invalid command" << endl;
-        }
+        return 0;
     }
+
+    thread serverThread;
+    thread clientThread;
+
+    while(true){
+        cli(&pool, &clientThread, &serverThread, workerThreads);
+    }
+    return 0;
 }

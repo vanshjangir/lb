@@ -17,12 +17,8 @@
 #define MAX_RECV_SIZE       4096
 #define SERVER_PORT         3000
 #define CUSTOM_HEADER_SIZE  14
-
-/* whether server is connected or not */
-enum serverStatus{
-    LB_SERVER_ALIVE,
-    LB_SERVER_DEAD,
-};
+#define RAW_BUFFER_SIZE     65536
+#define VIP                 "144.144.144.144"
 
 /* socket info struct */
 struct lbSocket{
@@ -48,5 +44,8 @@ int connectToServer(ServerPool *pPool);
 
 /* connect a client to the load balancer */
 int connectNewClient(lbSocket &clientSocket, int clientEpollFd);
+
+/* direct server return model */
+void dsr(void);
 
 #endif // !NET_H

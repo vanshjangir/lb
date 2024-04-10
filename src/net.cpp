@@ -4,6 +4,9 @@
 #include <condition_variable>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
+#include <string.h>
 #include <fcntl.h>
 
 #include "../lib/lb.h"
@@ -175,29 +178,29 @@ int monitorServerFd(ServerPool *pPool){
 
 int setupClientListener(lbSocket &lbClientSocket, int port, int clientEpollFd){
 
-    epoll_event epollEvent;
     int flags;
     int reuse = 1;
+    epoll_event epollEvent;
     lbClientSocket.addr.sin_family = AF_INET;
     lbClientSocket.addr.sin_port = htons(port);
     lbClientSocket.addr.sin_addr.s_addr = INADDR_ANY;
     lbClientSocket.addrlen = sizeof(lbClientSocket.addr);
     
     lbClientSocket.fd = socket(AF_INET, SOCK_STREAM, 0);
-
     if(lbClientSocket.fd == -1){
         cerr << "error creating socket lbClientSocket";
         return -1;
     }
     
-    if(setsockopt(lbClientSocket.fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse))<0){
+    if(setsockopt(lbClientSocket.fd, SOL_SOCKET,
+                SO_REUSEPORT, &reuse, sizeof(reuse))<0)
+    {
         printf("setting SO_REUSEPORT failed\n");
         exit(-1);
     }
 
     flags = fcntl(lbClientSocket.fd, F_GETFL, 0);
     flags |= O_NONBLOCK;
-    
 
     if(bind(lbClientSocket.fd,
             reinterpret_cast<struct sockaddr*>(&lbClientSocket.addr),
@@ -226,4 +229,76 @@ int setupClientListener(lbSocket &lbClientSocket, int port, int clientEpollFd){
         return -1;
     }
     return 0;
+}
+
+void dsr(){
+
+    lbSocket rawSocket;
+    char buffer[RAW_BUFFER_SIZE];
+    struct sockaddr_in destAddr;
+
+    rawSocket.fd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+    if (rawSocket.fd < 0) {
+        perror("Failed to create socket");
+        return;
+    }
+
+    while(true){
+        struct iphdr *ip_header;
+        struct tcphdr *tcp_header;
+        struct iphdr new_ip_header;
+        struct in_addr vIP;
+        vIP.s_addr = inet_addr(VIP);
+
+        int data_size = recvfrom(
+                rawSocket.fd, buffer,
+                RAW_BUFFER_SIZE,
+                0,
+                (struct sockaddr*)&rawSocket.addr,
+                &rawSocket.addrlen);
+
+        if (data_size < 0) {
+            perror("Failed to receive packet");
+            close(rawSocket.fd);
+            return;
+        }
+
+        ip_header = (struct iphdr *)buffer;
+        tcp_header = (struct tcphdr *)(buffer + ip_header->ihl * 4);
+
+        if(memcmp(&vIP, &(ip_header->daddr), sizeof(struct in_addr)) != 0){
+            continue;
+        }
+
+        printf("Packet received from: %s\n", inet_ntoa(rawSocket.addr.sin_addr));
+        printf("Source IP: %s\n", inet_ntoa(*(struct in_addr *)&ip_header->saddr));
+        printf("Source Port: %u\n", ntohs(tcp_header->source));
+        printf("Destination IP: %s\n", inet_ntoa(*(struct in_addr *)&ip_header->daddr));
+        printf("Destination Port: %u\n", ntohs(tcp_header->dest));
+        printf("Packet Length: %d\n\n", data_size);
+        fflush(stdout);
+
+        memset(&new_ip_header, 0, sizeof(new_ip_header));
+
+        new_ip_header.ihl = 5;
+        new_ip_header.version = 4;
+        new_ip_header.tot_len = htons(data_size + sizeof(struct iphdr));
+        new_ip_header.id = htons(54321);
+        new_ip_header.ttl = 64;
+        new_ip_header.protocol = IPPROTO_IPIP;
+        new_ip_header.saddr = ip_header->saddr;
+        new_ip_header.daddr = inet_addr("");
+
+        memmove(buffer + sizeof(struct iphdr), buffer, data_size);
+        memcpy(buffer, &new_ip_header, sizeof(struct iphdr));
+        memset(&destAddr, 0, sizeof(destAddr));
+
+        destAddr.sin_family = AF_INET;
+        destAddr.sin_addr.s_addr = new_ip_header.daddr;
+
+        sendto(rawSocket.fd, buffer, data_size + sizeof(struct iphdr), 0,
+               (struct sockaddr *)&destAddr, sizeof(destAddr));
+
+        printf("packet sent\n");
+    }
 }
