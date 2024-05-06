@@ -309,10 +309,7 @@ void cli(
             return;
         }
 
-        //if(_DSR_ENABLE)
-        //    rc = runDSR(pPool);
-        //else
-            rc = runLB(pPool, pServerThread, pClientThread, workerThreads);
+        rc = runLB(pPool, pServerThread, pClientThread, workerThreads);
 
         if(rc != 0)
             cout << "error running load balancer\n";
