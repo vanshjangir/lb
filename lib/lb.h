@@ -55,6 +55,8 @@ class ServerPool{
     void setTime(int index);
 
     void setLatency(int fd);
+
+    void getServerData(std::vector<std::pair<std::string,int>> *pServerTable);
 };
 
 enum taskType{
@@ -73,6 +75,7 @@ extern std::queue<task> taskQueue;
 extern std::mutex threadMutex;
 extern std::condition_variable threadCondition;
 extern std::map<int,ClientHash> fdToClient;
+extern std::string _LB_IP;
 
 void threadWorker(ServerPool *pPool);
 

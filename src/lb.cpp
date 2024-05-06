@@ -21,6 +21,7 @@ std::mutex threadMutex;
 std::condition_variable threadCondition;
 std::ofstream logStream;
 std::map<int,ClientHash> fdToClient;
+std::string _LB_IP = "";
 
 bool _IS_RUNNING = false;
 bool _DSR_ENABLE = false;
@@ -37,11 +38,6 @@ ServerProp::ServerProp(string ip, int port, int weight){
 }
 
 ServerPool::ServerPool(){
-    // for testing
-    mTable.push_back({"192.168.0.116", 3000, 1});
-    // for testing 
-
-
     mCurIndex = 0;
 }
 
@@ -117,6 +113,13 @@ void ServerPool::setLatency(int fd){
     }
 }
 
+void ServerPool::getServerData(vector<pair<string,int>> *pServerTable){
+
+    for(int i=0; i<mTable.size(); i++){
+        pServerTable->push_back({mTable[i].ip, mTable[i].port});
+    }
+}
+
 void setLOG(string s){
     logStream << s << endl;
 }
@@ -147,6 +150,10 @@ int parseCmdArgs(char *arg){
         case '-':
             if(strncmp(arg+2, "DSR", 3) == 0){
                 _DSR_ENABLE = true;
+                return 0;
+            }
+            else if(strncmp(arg+2, "LB_IP=", 6) == 0){
+                _LB_IP = arg+8;
                 return 0;
             }
             else
@@ -228,15 +235,9 @@ int runLB(
     return 0;
 }
 
-int runDSR(ServerPool *pPool, thread workerThreads[]){
-    
-    //for(int i=0; i<_NUM_THREADS; i++){
-    //    workerThreads[i] = thread(threadWorker, pPool);
-    //    workerThreads[i].detach();
-    //}
+int runDSR(ServerPool *pPool){
 
     dsr(pPool);
-        
     _IS_RUNNING = true;
     return 0;
 }
@@ -251,6 +252,7 @@ void lbExit(
         goto out;
 
     if(_DSR_ENABLE){
+        system("iptables --table nat --flush");
         goto out;
     }
 
@@ -282,8 +284,11 @@ void cli(
     string rawInput;
     vector<string> inputArgs;
 
-    cout << "\nlb[" <<(_IS_RUNNING? "up": "down")<< "]::";
+    printf("lb[%s/%s]::", _IS_RUNNING? "up": "down", _DSR_ENABLE? "dsr": "normal");
     getline(cin,rawInput);
+
+    if(rawInput == "")
+        return;
     
     parseCliInput(rawInput, inputArgs);
 
@@ -301,11 +306,12 @@ void cli(
         if(!pPool->checkHealth()){
             cout << "zero servers found\n";
             lbExit(pServerThread, pClientThread, workerThreads);
+            return;
         }
 
-        if(_DSR_ENABLE)
-            rc = runDSR(pPool, workerThreads);
-        else
+        //if(_DSR_ENABLE)
+        //    rc = runDSR(pPool);
+        //else
             rc = runLB(pPool, pServerThread, pClientThread, workerThreads);
 
         if(rc != 0)
@@ -339,18 +345,23 @@ int main(int argc, char **argv){
                 lbExit();
         }
     }
+
+    if(_LB_IP == ""){
+        printf("Load balancer IP not given in cmd\n");
+        return -1;
+    }
     
     ServerPool pool;
-    thread workerThreads[4];
     logStream = ofstream("debug.log");
 
     if(_DSR_ENABLE){
         while(true){
-            cli(&pool, NULL, NULL, workerThreads);
+            cli(&pool, NULL, NULL, NULL);
         }
         return 0;
     }
 
+    thread workerThreads[4];
     thread serverThread;
     thread clientThread;
 

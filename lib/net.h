@@ -17,7 +17,6 @@
 #define SERVER_PORT         3000
 #define CUSTOM_HEADER_SIZE  14
 #define RAW_BUFFER_SIZE     65536
-#define VIP                 "144.144.144.144"
 
 /* socket info struct */
 struct lbSocket{

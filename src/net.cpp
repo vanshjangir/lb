@@ -5,9 +5,8 @@
 #include <unistd.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
-#include <string.h>
 #include <fcntl.h>
-#include <iostream>
+#include <cstdlib>
 
 #include "../lib/lb.h"
 #include "../lib/net.h"
@@ -235,78 +234,39 @@ int setupClientListener(lbSocket &lbClientSocket, int port, int clientEpollFd){
 }
 
 void dsr(ServerPool *pPool){
+    int rc;
+    int numServers;
+    char command[512];
+    vector<pair<string,int>> serverTable;
 
-    int optval = 1;
-    lbSocket rawSocket;
-    struct sockaddr_in destAddr;
+    pPool->getServerData(&serverTable);
+    numServers = serverTable.size();
 
-    rawSocket.fd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-    if (rawSocket.fd < 0) {
-        setLOG("Failed to create socket");
-        return;
-    }
-    if (setsockopt(rawSocket.fd, IPPROTO_IP, IP_HDRINCL, &optval, sizeof(optval)) < 0){
-        setLOG("setsockopt");
-        return;
-    }
+    system("iptables --table nat --flush");
+    for(int i=0; i<serverTable.size(); i++){
+        snprintf(command, 512,
+                "iptables --table nat \
+                --append PREROUTING \
+                --destination %s \
+                --protocol tcp \
+                --dport 3000 \
+                --match statistic \
+                --mode nth \
+                --every %d \
+                --packet 0 \
+                --jump DNAT \
+                --to-destination %s:%d",
+                _LB_IP.c_str(),
+                numServers--,
+                //serverTable[i].first.c_str(),
+                //serverTable[i].second
+                "192.168.0.112",
+                3000
+                );
 
-    setLOG("DSR mode enabled");
-
-    while(true){
-        int destPort;
-        char destIP[16];
-        char buffer[RAW_BUFFER_SIZE];
-        struct iphdr *ip_header;
-        struct tcphdr *tcp_header;
-        ClientHash cHash;
-
-        int data_size = recvfrom(rawSocket.fd, buffer, RAW_BUFFER_SIZE, 0,
-                (struct sockaddr*)&rawSocket.addr, &rawSocket.addrlen);
-
-        if (data_size < 0) {
-            setLOG("Failed to receive packet");
-            close(rawSocket.fd);
-            return;
+        rc = system(command);
+        if(rc == -1){
+            setLOG("system command error");
         }
-
-        ip_header = (struct iphdr *)buffer;
-        tcp_header = (struct tcphdr *)(buffer + 4*(ip_header->ihl));
-        
-        if(ip_header->protocol != IPPROTO_TCP){
-            continue;
-        }
-        
-        string src = inet_ntoa(*(struct in_addr*)&ip_header->saddr);
-        string dest = inet_ntoa(*(struct in_addr*)&ip_header->daddr);
-
-        if(src != "192.168.0.105"){
-            continue;
-        }
-        
-        if(dest != "192.168.0.112"){
-            continue;
-        }
-
-        setLOG("src: "+ src);
-        setLOG("dest: "+ dest);
-        cout << "src: " << src << endl;
-        cout << "dest: " << dest << endl;
-        cout << "srcport: " << ntohs(tcp_header->source) << endl;
-        cout << "destport: " << ntohs(tcp_header->dest) << endl;
-        cout << endl;
-        
-        cHash.first = inet_ntoa(*(struct in_addr*)&ip_header->saddr);
-        cHash.second = ntohs(tcp_header->source);
-        pPool->nextServer(&cHash ,destIP, destPort);
-
-        ip_header->daddr = inet_addr("192.168.0.101");
-        memset(&destAddr, 0, sizeof(destAddr));
-        destAddr.sin_family = AF_INET;
-        destAddr.sin_addr.s_addr = inet_addr("192.168.0.101");
-
-        sendto(rawSocket.fd, buffer, data_size, 0,
-               (struct sockaddr *)&destAddr, sizeof(destAddr));
-
-        setLOG("packet sent\n");
     }
 }
