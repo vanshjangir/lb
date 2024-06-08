@@ -234,39 +234,4 @@ int setupClientListener(lbSocket &lbClientSocket, int port, int clientEpollFd){
 }
 
 void dsr(ServerPool *pPool){
-    int rc;
-    int numServers;
-    char command[512];
-    vector<pair<string,int>> serverTable;
-
-    pPool->getServerData(&serverTable);
-    numServers = serverTable.size();
-
-    system("iptables --table nat --flush");
-    for(int i=0; i<serverTable.size(); i++){
-        snprintf(command, 512,
-                "iptables --table nat \
-                --append PREROUTING \
-                --destination %s \
-                --protocol tcp \
-                --dport 3000 \
-                --match statistic \
-                --mode nth \
-                --every %d \
-                --packet 0 \
-                --jump DNAT \
-                --to-destination %s:%d",
-                _LB_IP.c_str(),
-                numServers--,
-                //serverTable[i].first.c_str(),
-                //serverTable[i].second
-                "192.168.0.112",
-                3000
-                );
-
-        rc = system(command);
-        if(rc == -1){
-            setLOG("system command error");
-        }
-    }
 }
