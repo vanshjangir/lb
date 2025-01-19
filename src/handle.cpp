@@ -8,25 +8,42 @@
 
 using namespace std;
 
-void handleTask(task qtask, ServerPool *pPool){
+void handleTask(Task task, ServerPool *pPool){
     
     char buffer[MAX_RECV_SIZE +1];
     ssize_t bytes_received = 0;
 
     bytes_received = recv(
-            qtask.fd,
+            task.fd,
             buffer,
             MAX_RECV_SIZE,
             0);
 
-    if(qtask.type == LB_REQUEST){
-        sendToServer(buffer, bytes_received, qtask, pPool);
+    if(task.type == LB_REQUEST){
+        fdToClient[task.fd] = getClientHash(task.fd);
+        sendToServer(buffer, bytes_received, task, pPool);
     }
-    else if(qtask.type == LB_RESPONSE){
+    else if(task.type == LB_RESPONSE){
         sendToClient(buffer, bytes_received);
-        pPool->setLatency(qtask.fd);
-        close(qtask.fd);
+        pPool->setLatency(task.fd);
+        close(task.fd);
     }
+}
+
+ClientHash getClientHash(int fd){
+    ClientHash hash;
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+
+    int rc = getpeername(fd, (struct sockaddr*)&client_addr, &addr_len);
+    if(rc == 0){
+        char ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
+        int port = ntohs(client_addr.sin_port);
+        hash.first = ip;
+        hash.second = port;
+    }
+    return hash;
 }
 
 int sendToClient(char buffer[], int buflen){
@@ -59,14 +76,14 @@ int getClientResponseFd(char buffer[], int buflen){
     return fd;
 }
 
-int sendToServer(char *buffer, int buflen, task& clientTask, ServerPool *pPool){
+int sendToServer(char *buffer, int buflen, Task& clientTask, ServerPool *pPool){
 
     int fd;
     int firstChunkLength;
     char clientFdHeader[15];
     ssize_t bytes_sent;
 
-    fd = connectToServer(clientTask.fd ,pPool);
+    fd = lbClient(clientTask.fd ,pPool);
 
     firstChunkLength = 0;
     while(true){

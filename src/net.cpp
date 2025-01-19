@@ -13,7 +13,7 @@
 
 using namespace std;
 
-int connectNewClient(lbSocket &clientSocket, int clientEpollFd){
+int lbServer(lbSocket &clientSocket, int clientEpollFd){
     lbSocket client;
     client.fd = accept(clientSocket.fd,
                 reinterpret_cast<sockaddr*>(&clientSocket.addr),
@@ -42,7 +42,7 @@ int connectNewClient(lbSocket &clientSocket, int clientEpollFd){
     return 0;
 }
 
-int connectToServer(int clientFd, ServerPool *pPool){
+int lbClient(int clientFd, ServerPool *pPool){
     int rc;
     int flags;
     lbSocket server;
@@ -66,6 +66,7 @@ int connectToServer(int clientFd, ServerPool *pPool){
         return -1;
     }
 
+    pPool->addIndex(server.fd);
     pPool->setTime(sIndex);
 
     rc = connect(
@@ -100,7 +101,7 @@ int connectToServer(int clientFd, ServerPool *pPool){
     return server.fd;
 }
 
-int monitorClientFd(
+int clientFdLoop(
         lbSocket lbClientSocket,
         int clientEpollFd,
         epoll_event clientEventArray[])
@@ -120,29 +121,30 @@ int monitorClientFd(
         for(int i=0; i<numEvents; i++){
             
             if(clientEventArray[i].data.fd == lbClientSocket.fd){
-                connectNewClient(lbClientSocket, clientEpollFd);
+                lbServer(lbClientSocket, clientEpollFd);
             }
             else if(clientEventArray[i].events & EPOLLIN){
 
-                task queueTask;
-                queueTask.type = LB_REQUEST;
-                queueTask.fd = clientEventArray[i].data.fd;
+                Task task;
+                task.type = LB_REQUEST;
+                task.fd = clientEventArray[i].data.fd;
                 {
                     unique_lock<mutex> lock(threadMutex);
-                    taskQueue.push(queueTask);
+                    taskQueue.push(task);
                 }
 
                 threadCondition.notify_one();
             }
             else if(clientEventArray[i].events & EPOLLRDHUP){
                 setLOG("disconnected");
+                printLOG("Disconnected from client");
             }
         }
     }
     return 0;
 }
 
-int monitorServerFd(ServerPool *pPool){
+int serverFdLoop(ServerPool *pPool){
 
     while(true){
 
@@ -158,7 +160,7 @@ int monitorServerFd(ServerPool *pPool){
         for(int i=0; i<numEvents; i++){
             
             if(pPool->eventArray[i].events & EPOLLIN){
-                task queueTask;
+                Task queueTask;
                 queueTask.type = LB_RESPONSE;
                 queueTask.fd = pPool->eventArray[i].data.fd;
                 
@@ -171,6 +173,7 @@ int monitorServerFd(ServerPool *pPool){
             }
             else if(pPool->eventArray[i].events & EPOLLRDHUP){
                 setLOG("disconnected");
+                printLOG("Disconnected from server");
             }
         }
     }
@@ -178,7 +181,7 @@ int monitorServerFd(ServerPool *pPool){
 }
 
 
-int setupClientListener(lbSocket &lbClientSocket, int port, int clientEpollFd){
+int lbServerSetup(lbSocket &lbClientSocket, int port, int clientEpollFd){
 
     int flags;
     int reuse = 1;

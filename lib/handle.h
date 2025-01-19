@@ -4,19 +4,16 @@
 #include <string>
 #include "lb.h"
 
-/* Handles a task from the task queue */
-void handleTask(task qtask, ServerPool* pPool);
+void handleTask(Task qTask, ServerPool* pPool);
 
-/* send the recieved client request to the server */
-int sendToServer(char *buffer, int buflen, task& clientTask, ServerPool* pPool);
+int sendToServer(char *buffer, int buflen, Task& clientTask, ServerPool* pPool);
 
-/* send the received server response to client */
 int sendToClient(char *buffer, int buflen);
 
-/* Add the client socket file descriptor to the response */
 int addClientFdHeader(char *header, int fd);
 
-/* Parse the clients socket file descriptor to recognize the client */
 int getClientResponseFd(char* buffer, int buflen);
+
+ClientHash getClientHash(int fd);
 
 #endif // !HANDLE_H

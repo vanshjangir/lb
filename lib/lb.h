@@ -18,12 +18,11 @@
 struct ServerProp{
     std::string ip;
     int port;
-    int weight;
     int avgLatency;
     int nreq;
     std::chrono::time_point<std::chrono::high_resolution_clock> curtime;
 
-    ServerProp(std::string ip, int port, int weight);
+    ServerProp(std::string ip, int port);
 };
 
 typedef std::pair<std::string,int> ClientHash;
@@ -46,7 +45,7 @@ class ServerPool{
 
     int nextServer(ClientHash *pCHash,char *serverIP, int &port);
 
-    void addServer(const char *serverIP, int port, int weight);
+    void addServer(const char *serverIP, int port);
 
     void listServer();
     
@@ -57,29 +56,33 @@ class ServerPool{
     void setLatency(int fd);
 
     void getServerData(std::vector<std::pair<std::string,int>> *pServerTable);
+
+    void addIndex(int fd);
 };
 
-enum taskType{
+enum TaskType{
     LB_REQUEST,
     LB_RESPONSE,
     LB_DUMMY
 };
 
-struct task{
+struct Task{
     int fd;
-    taskType type;
+    TaskType type;
 };
 
 extern std::atomic<bool> exitThread;
-extern std::queue<task> taskQueue;
+extern std::queue<Task> taskQueue;
 extern std::mutex threadMutex;
 extern std::condition_variable threadCondition;
 extern std::map<int,ClientHash> fdToClient;
 extern std::string _LB_IP;
 
-void threadWorker(ServerPool *pPool);
+void worker(ServerPool *pPool);
 
 void setLOG(std::string s);
+
+void printLOG(std::string s);
 
 void lbExit(
         std::thread &serverThread,

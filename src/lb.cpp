@@ -16,7 +16,7 @@
 #include "../lib/handle.h"
 
 std::atomic<bool> exitThread(false);
-std::queue<task> taskQueue;
+std::queue<Task> taskQueue;
 std::mutex threadMutex;
 std::condition_variable threadCondition;
 std::ofstream logStream;
@@ -29,10 +29,9 @@ int _NUM_THREADS = 4;
 
 using namespace std;
 
-ServerProp::ServerProp(string ip, int port, int weight){
+ServerProp::ServerProp(string ip, int port){
     this->ip = ip;
     this->port = port;
-    this->weight = weight;
     this->avgLatency = 0;
     this->nreq = 0;
 }
@@ -48,8 +47,11 @@ bool ServerPool::checkHealth(){
         return true;
 }
 
-int ServerPool::nextServer(ClientHash *pCHash, char *serverIP, int &port){
+void ServerPool::addIndex(int fd){
+    mFdToServer[fd] = mCurIndex;
+}
 
+int ServerPool::nextServer(ClientHash *pCHash, char *serverIP, int &port){
     if(mClientToServer[*pCHash].first == ""){
         mCurIndex = (mCurIndex+1)%(mTable.size());
         mClientToServer[*pCHash].first = mTable[mCurIndex].ip;
@@ -70,23 +72,22 @@ int ServerPool::nextServer(ClientHash *pCHash, char *serverIP, int &port){
 }
 
 void ServerPool::listServer(){
-    cout << "\nIP Address\tPort\tWeight\tLatency(microseconds)" << endl;
+    cout << "\nIP Address\tPort\tLatency(microseconds)" << endl;
     for(int i=0; i<(int)mTable.size(); i++){
         cout << mTable[i].ip << "\t";
         cout << mTable[i].port << "\t";
-        cout << mTable[i].weight << "\t";
         cout << mTable[i].avgLatency << endl;
     }
 }
 
-void ServerPool::addServer(const char *serverIP, int port, int weight){
+void ServerPool::addServer(const char *serverIP, int port){
 
     /* testing the server before pushing,
      * not implemented yet
      */
 
     string s(serverIP);
-    ServerProp newServer(s, port, weight);
+    ServerProp newServer(s, port);
     mTable.push_back(newServer);
 }
 
@@ -124,7 +125,12 @@ void setLOG(string s){
     logStream << s << endl;
 }
 
-/* Parse the input char array into a vector of strings */
+void printLOG(string s){
+    cout << "\n";
+    cout << "lb[LOG]::" << s << "\n";
+    printf("lb[%s/%s]::", _DSR_ENABLE ? "dsr" : "tcp", _IS_RUNNING ? "up" : "down");
+}
+
 void parseCliInput(string rawInput, vector<string> &inputArgs){
 
     for(int i=0; i<(int)rawInput.size(); i++){
@@ -170,7 +176,7 @@ out:
     return -1;
 }
 
-void threadWorker(ServerPool *pPool){
+void worker(ServerPool *pPool){
 
     if(_DSR_ENABLE){
         dsr(pPool);
@@ -178,7 +184,7 @@ void threadWorker(ServerPool *pPool){
     }
     
     while(!exitThread){
-        task qtask;
+        Task qtask;
         {
             unique_lock<mutex> lock(threadMutex);
             threadCondition.wait(lock, [&]{ return !taskQueue.empty(); });
@@ -217,18 +223,18 @@ int runLB(
     pPool->eventArray = new epoll_event[MAX_SERVER_LIMIT];
     clientEventArray = new epoll_event[MAX_CLIENT_LIMIT];
 
-    setupClientListener(lbClientSocket, LB_CLIENT_PORT, clientEpollFd);
+    lbServerSetup(lbClientSocket, LB_CLIENT_PORT, clientEpollFd);
 
     *(pClientThread) = thread(
-            monitorClientFd,
+            clientFdLoop,
             lbClientSocket,
             clientEpollFd,
             clientEventArray);
 
-    *(pServerThread) = thread(monitorServerFd, pPool);
+    *(pServerThread) = thread(serverFdLoop, pPool);
     
     for(int i=0; i<_NUM_THREADS; i++){
-        workerThreads[i] = thread(threadWorker, pPool);
+        workerThreads[i] = thread(worker, pPool);
     }
     
     _IS_RUNNING = true;
@@ -258,7 +264,7 @@ void lbExit(
 
     exitThread = true;
     {
-        task dummy;
+        Task dummy;
         dummy.type = LB_DUMMY;
         unique_lock<mutex> lock(threadMutex);
         taskQueue.push(dummy);
@@ -284,7 +290,7 @@ void cli(
     string rawInput;
     vector<string> inputArgs;
 
-    printf("lb[%s/%s]::", _IS_RUNNING? "up": "down", _DSR_ENABLE? "dsr": "normal");
+    printf("lb[%s/%s]::", _DSR_ENABLE ? "dsr" : "tcp", _IS_RUNNING ? "up" : "down");
     getline(cin,rawInput);
 
     if(rawInput == "")
@@ -299,6 +305,7 @@ void cli(
     }
     else if(inputArgs[0] == "down"){
         lbExit(pServerThread, pClientThread, workerThreads);
+        _IS_RUNNING = false;
     }
     else if(inputArgs[0] == "up"){
 
@@ -318,12 +325,8 @@ void cli(
         pPool->listServer();
     }
     else if(inputArgs[0] == "add"){
-        if(inputArgs.size() == 4){
-            pPool->addServer(
-                    inputArgs[1].c_str(),
-                    stoi(inputArgs[2]),
-                    stoi(inputArgs[3])
-                    );
+        if(inputArgs.size() == 3){
+            pPool->addServer(inputArgs[1].c_str(), stoi(inputArgs[2]));
         }
         else{
             cout << "incorrect arguments\n";
@@ -334,19 +337,7 @@ void cli(
     }
 }
 
-int main(int argc, char **argv){
-
-    if(argc>1){
-        for(int i=1; i<argc; i++){
-            if(parseCmdArgs(argv[i]) != 0)
-                lbExit();
-        }
-    }
-
-    if(_LB_IP == ""){
-        printf("Load balancer IP not given in cmd\n");
-        return -1;
-    }
+int main(){
     
     ServerPool pool;
     logStream = ofstream("debug.log");
