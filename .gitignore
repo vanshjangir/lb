@@ -1,2 +1,2 @@
-build/*
-debug.log
+/target
+file.json
